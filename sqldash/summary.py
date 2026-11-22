@@ -70,6 +70,6 @@ def summarize(sql, dialect, *, environ=os.environ, client=None):
     return {
         "text": text,
         "model": response.model,
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
+        "input_tokens": response.usage.input_tokens or 0,
+        "output_tokens": response.usage.output_tokens or 0,
     }

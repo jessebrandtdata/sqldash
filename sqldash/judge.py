@@ -62,9 +62,13 @@ def judge(sql, english, dialect, *, environ=os.environ, client=None):
     answer = resp.answers.get(words.JUDGE_QUESTION)
     if answer is None or answer.choice not in words.JUDGE_CRITERIA:
         raise ServiceError("upstream")
+    confidence = getattr(answer, "confidence", None)
+    # a missing, None or non-numeric confidence is not an answer sqldash can use
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        raise ServiceError("upstream")
     return {
         "choice": answer.choice,
-        "confidence": float(answer.confidence),
+        "confidence": float(confidence),
         "probabilities": dict(answer.probabilities or {}),
         "model": resp.model,
     }

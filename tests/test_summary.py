@@ -123,3 +123,10 @@ def test_sdk_errors_map():
         assert "secret" not in str(err.detail)
         if kind == "bad_key":
             assert err.detail == "ANTHROPIC_API_KEY"
+
+
+def test_none_token_counts_become_zero():
+    r = reply()
+    r.usage = SimpleNamespace(input_tokens=None, output_tokens=None)
+    out = summary.summarize("select 1", "postgres", environ={}, client=FakeClient(r))
+    assert (out["input_tokens"], out["output_tokens"]) == (0, 0)

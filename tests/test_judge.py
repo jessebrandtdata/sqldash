@@ -96,3 +96,12 @@ def test_sdk_errors_map():
         assert "secret" not in str(err.detail)
         if kind == "bad_key":
             assert err.detail == "TYPESAFE_API_KEY"
+
+
+def test_confidence_missing_none_or_not_a_number():
+    for bad in (None, "high", object()):
+        client = FakeClient(reply("agrees", bad))
+        assert kind_of(lambda: judge.judge("select 1", "one", "postgres", environ={}, client=client)).kind == "upstream"
+    answer = SimpleNamespace(choice="agrees", probabilities={})
+    client = FakeClient(reply(answers={"agreement": answer}))
+    assert kind_of(lambda: judge.judge("select 1", "one", "postgres", environ={}, client=client)).kind == "upstream"
