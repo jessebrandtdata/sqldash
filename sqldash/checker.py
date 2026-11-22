@@ -23,7 +23,12 @@ def _check_postgres(sql, d):
         stmts = pglast.parse_sql(sql)
     except ParseError as e:
         message, index = e.args[0], e.args[1]
-        line, col = _line_col(sql, index)
+        if index is None:
+            # an end-of-input error sits just after the last non-whitespace character
+            kept = sql.rstrip()
+            line, col = _line_col(sql, len(kept)) if kept else (None, None)
+        else:
+            line, col = _line_col(sql, index)
         return _result(d, 0, {"message": message, "line": line, "col": col, "end_col": None})
     return _result(d, len(stmts), None)
 

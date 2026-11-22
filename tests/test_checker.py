@@ -52,3 +52,20 @@ def test_sqlglot_tokenizer_error_has_no_position():
 def test_unknown_dialect():
     with pytest.raises(ValueError):
         check("select 1", "oracle")
+
+
+def test_postgres_end_of_input_error_has_a_position():
+    e = check("select (", "postgres")["error"]
+    assert e == {"message": "syntax error at end of input", "line": 1, "col": 9, "end_col": None}
+
+
+def test_postgres_end_of_input_ignores_trailing_whitespace():
+    e = check("select 1;\nselect * from t where  \n", "postgres")["error"]
+    assert (e["line"], e["col"]) == (2, 22)
+
+
+def test_postgres_unfinished_statements_never_raise():
+    for sql in ["select (", "select 1 +", "create table x (a int", "insert into t values (",
+                "select a from t join", "update t set", "delete", "grant"]:
+        r = check(sql, "postgres")
+        assert r["ok"] is False and isinstance(r["error"]["message"], str), sql
