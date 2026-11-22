@@ -306,3 +306,17 @@ def test_links_shape():
 
 def test_copyright_file_is_committed():
     assert "PostgreSQL" in (INDEX_PATH.parent / "POSTGRESQL-COPYRIGHT.txt").read_text()
+
+
+def test_kind_order_puts_a_type_before_a_function():
+    order = load_script().KIND_ORDER
+    assert order == ["command", "clause", "type", "function", "topic"]
+    assert [e["kind"] for e in INDEX["entries"]["TEXT"]][:2] == ["type", "function"]
+
+
+def test_phrase_entries_are_titled_by_their_source_term():
+    entries = INDEX["entries"]
+    assert entries["LEFT JOIN"][0]["title"] == "LEFT OUTER JOIN"
+    assert entries["RIGHT JOIN"][0]["title"] == "RIGHT OUTER JOIN"
+    assert entries["CROSS JOIN"][0]["title"] == "Cross join"
+    assert entries["JOIN"][0]["title"] == "FROM Clause"

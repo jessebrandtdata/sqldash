@@ -22,7 +22,7 @@ CLIENT_NAME = "sqldash-build"
 
 TEXT_BUDGET = 1500
 KEY_RE = re.compile(r"[A-Z_][A-Z0-9_]*( [A-Z_][A-Z0-9_]*)*$")
-KIND_ORDER = ["command", "clause", "topic", "function", "type"]
+KIND_ORDER = ["command", "clause", "type", "function", "topic"]
 
 # the docs' own entities, which the source declares outside the files we read
 OWN_ENTITIES = {
@@ -457,7 +457,9 @@ def phrase_entries(files):
         inner = ids[-1]["id"]
         if inner != page:
             url += "#" + inner.upper()
-        rows.append(make_entry("clause", phrase, phrase, text, url))
+        # the source's own term titles the entry; a placeholder term (join_type) falls back to its section's title
+        title = ids[-1]["title"] if "_" in term else term
+        rows.append(make_entry("clause", phrase, title, text, url))
     return rows
 
 
