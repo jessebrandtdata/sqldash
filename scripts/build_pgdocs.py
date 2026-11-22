@@ -8,6 +8,7 @@ in main(), to fetch the tarball into ~/.cache/sqldash/.
 import html.entities
 import json
 import re
+import sys
 import tarfile
 import urllib.request
 from pathlib import Path
@@ -55,6 +56,34 @@ PHRASES = {
     "OUTER JOIN": ("queries.sgml", "Qualified joins", 0),
 }
 
+# element names the DocBook source files use, scanned once from doc/src/sgml/**/*.sgml; the stripper removes these
+DOCBOOK_TAGS = (
+    'abbrev', 'abstract', 'acronym', 'address', 'anchor', 'appendix', 'application', 'arg',
+    'attribution', 'author', 'authorgroup', 'bibliodiv', 'biblioentry', 'bibliography',
+    'biblioset', 'blockquote', 'book', 'bookinfo', 'callout', 'calloutlist', 'caution',
+    'chapter', 'citerefentry', 'citetitle', 'classname', 'cmdsynopsis', 'co', 'colspec',
+    'columnname', 'command', 'computeroutput', 'confdates', 'confgroup', 'conftitle',
+    'copyright', 'corpauthor', 'date', 'dbname', 'edition', 'email', 'emphasis', 'entry',
+    'envar', 'example', 'figure', 'filename', 'firstname', 'firstterm', 'footnote',
+    'footnoteref', 'formalpara', 'function', 'glossdef', 'glossentry', 'glosslist',
+    'glosssee', 'glossseealso', 'glossterm', 'group', 'holder', 'imagedata', 'imageobject',
+    'important', 'index', 'indexterm', 'informaltable', 'isbn', 'itemizedlist', 'keycap',
+    'keycombo', 'legalnotice', 'lineannotation', 'link', 'listitem', 'literal',
+    'literallayout', 'manvolnum', 'mediaobject', 'member', 'note', 'option', 'optional',
+    'orderedlist', 'pagenums', 'para', 'parameter', 'part', 'partintro', 'phrase',
+    'preface', 'primary', 'procedure', 'productname', 'productnumber', 'programlisting',
+    'prompt', 'pubdate', 'publisher', 'publishername', 'pubsnumber', 'quote', 'refentry',
+    'refentrytitle', 'reference', 'refmeta', 'refmiscinfo', 'refname', 'refnamediv',
+    'refpurpose', 'refsect1', 'refsect2', 'refsect3', 'refsynopsisdiv', 'replaceable',
+    'returnvalue', 'row', 'schemaname', 'screen', 'secondary', 'sect1', 'sect2', 'sect3',
+    'sect4', 'see', 'seealso', 'sgmltag', 'simpara', 'simplelist', 'simplesect', 'spanspec',
+    'step', 'structfield', 'structname', 'substeps', 'subtitle', 'superscript', 'surname',
+    'symbol', 'synopsis', 'systemitem', 'table', 'tablename', 'tbody', 'term', 'tertiary',
+    'tgroup', 'thead', 'tip', 'title', 'titleabbrev', 'token', 'town', 'trademark', 'type',
+    'ulink', 'userinput', 'variablelist', 'varlistentry', 'varname', 'volumenum', 'warning',
+    'xref', 'year',
+)
+
 # blocks cut out of a section body before its paragraphs are read (code and lists inside a paragraph stay)
 DROP_BLOCKS = ["table", "informaltable", "note", "tip", "warning", "caution", "example", "figure",
                "variablelist", "simplelist", "procedure", "indexterm", "footnote"]
@@ -78,13 +107,22 @@ def _entity(match):
     return html.entities.html5.get(name + ";", "")  # unknown entities become nothing
 
 
-# link target id (lower case) -> section title, filled from the source files by build_xref_titles
+# link target id (lower case) -> title, filled from every doc source file by collect_titles
 XREF_TITLES = {}
 XREF_RE = re.compile(r"""<xref\b[^>]*\blinkend=["']([^"']+)["'][^>]*?/?>(?:</xref>)?""")
+# ids that no title was found for, waiting for the entry that used them
+UNRESOLVED = []
+UNRESOLVED_COUNT = 0
 
 
 def _xref(match):
-    return XREF_TITLES.get(match.group(1).lower(), "\0")
+    global UNRESOLVED_COUNT
+    title = XREF_TITLES.get(match.group(1).lower())
+    if title is None:
+        UNRESOLVED.append(match.group(1))
+        UNRESOLVED_COUNT += 1
+        return "\0"
+    return title
 
 
 def sgml_text(s, keep_lines=False):
@@ -216,6 +254,9 @@ def first_synopsis(body):
 
 
 def make_entry(kind, key, title, text, url, synopsis=""):
+    for xref_id in UNRESOLVED:
+        print(f"unresolved xref {xref_id} in {key}", file=sys.stderr)
+    UNRESOLVED.clear()
     entry = {"key": key, "kind": kind, "title": title, "text": text, "url": url}
     if synopsis:
         entry["synopsis"] = synopsis
@@ -383,16 +424,22 @@ def parse_kwlist(text):
 # ---------------------------------------------------------------- build
 
 
-def build_xref_titles(files, refs):
-    """Map each section id in the files read to its title, for resolving cross-references."""
-    titles = {}
-    for sgml in list(files.values()) + list(refs.values()):
-        for m in re.finditer(r"""<(?:sect[1-5]|refsect[1-3]|chapter|table|example|figure)\b[^>]*\bid=["']([^"']+)["'][^>]*>\s*(?:<indexterm\b.*?</indexterm>\s*)*<title>(.*?)</title>""", sgml, flags=re.S):
-            titles[m.group(1).lower()] = sgml_text(m.group(2))
-        rm = re.search(r"""<refentry\b[^>]*\bid=["']([^"']+)["']""", sgml)
-        nm = re.search(r"<refname>(.*?)</refname>", sgml, flags=re.S)
-        if rm and nm:
-            titles[rm.group(1).lower()] = sgml_text(nm.group(1))
+TITLED_ID = re.compile(
+    r"""<([a-z0-9]+)\b[^>]*\bid=["']([^"']+)["'][^>]*>\s*(?:<indexterm\b.*?</indexterm>\s*)*<title>(.*?)</title>""", re.S)
+TERM_ID = re.compile(
+    r"""<varlistentry\b[^>]*\bid=["']([^"']+)["'][^>]*>\s*<term>(.*?)</term>""", re.S)
+
+
+def collect_titles(sgml, titles):
+    """Add id -> title for every element in one source file that carries an id and a title."""
+    for m in TITLED_ID.finditer(sgml):
+        titles[m.group(2).lower()] = sgml_text(m.group(3))
+    for m in TERM_ID.finditer(sgml):
+        titles.setdefault(m.group(1).lower(), sgml_text(m.group(2)))
+    rm = re.search(r"""<refentry\b[^>]*\bid=["']([^"']+)["']""", sgml)
+    nm = re.search(r"<refname>(.*?)</refname>", sgml, flags=re.S)
+    if rm and nm:
+        titles[rm.group(1).lower()] = sgml_text(nm.group(1))
     return titles
 
 
@@ -423,20 +470,29 @@ def read_members(tar_path):
               root + "doc/src/sgml/ref/select.sgml": "select.sgml",
               root + "src/include/parser/kwlist.h": "kwlist.h",
               root + "COPYRIGHT": "COPYRIGHT"}
-    files, refs = {}, {}
+    files, refs, titles = {}, {}, {}
     with tarfile.open(tar_path, "r:bz2") as tar:
         for m in tar:
             if not m.isfile():
                 continue
+            is_sgml = m.name.startswith(root + "doc/src/sgml/") and m.name.endswith(".sgml")
+            if m.name not in wanted and not is_sgml:
+                continue
+            text = tar.extractfile(m).read().decode("utf-8")
             if m.name in wanted:
-                files[wanted[m.name]] = tar.extractfile(m).read().decode("utf-8")
-            if m.name.startswith(root + "doc/src/sgml/ref/") and m.name.endswith(".sgml"):
-                refs[m.name] = tar.extractfile(m).read().decode("utf-8")
-    return files, refs
+                files[wanted[m.name]] = text
+            if m.name.startswith(root + "doc/src/sgml/ref/") and is_sgml:
+                refs[m.name] = text
+            if is_sgml:
+                collect_titles(text, titles)  # every doc file, for cross-references
+    return files, refs, titles
 
 
-def build_index(files, refs):
-    XREF_TITLES.update(build_xref_titles(files, refs))
+def build_index(files, refs, titles):
+    XREF_TITLES.update(titles)
+    UNRESOLVED.clear()  # xrefs met while reading titles do not belong to any entry
+    global UNRESOLVED_COUNT
+    UNRESOLVED_COUNT = 0
     rows = []
     for name in sorted(refs):
         rows += parse_ref_page(refs[name])
@@ -469,13 +525,13 @@ def fetch_tarball():
 
 
 def main():
-    files, refs = read_members(fetch_tarball())
-    index = build_index(files, refs)
+    files, refs, titles = read_members(fetch_tarball())
+    index = build_index(files, refs, titles)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / "pg17.json"
     out.write_text(json.dumps(index, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
     (OUT_DIR / "POSTGRESQL-COPYRIGHT.txt").write_text(files["COPYRIGHT"], encoding="utf-8")
-    print(f"keys: {len(index['entries'])}  reserved: {len(index['reserved'])}  bytes: {out.stat().st_size}")
+    print(f"keys: {len(index['entries'])}  reserved: {len(index['reserved'])}  bytes: {out.stat().st_size}  unresolved xrefs: {UNRESOLVED_COUNT}")
 
 
 if __name__ == "__main__":

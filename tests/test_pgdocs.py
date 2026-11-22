@@ -224,6 +224,29 @@ def test_sgml_text_drops_comments_indexterms_and_unknown_entities():
     assert out == "a b c &"
 
 
+def test_escaped_angle_brackets_survive_the_stripper():
+    mod = load_script()
+    assert mod.sgml_text("<screen>&lt;foo&gt;abc&lt;/foo&gt;</screen>") == "<foo>abc</foo>"
+    assert "foo" not in mod.DOCBOOK_TAGS and "para" in mod.DOCBOOK_TAGS
+
+
+def test_xref_resolves_to_title_defined_in_another_file(monkeypatch):
+    mod = load_script()
+    other = '<sect1 id="Other-Page"><title>The <literal>Other</literal> Page</title><para>x</para></sect1>'
+    ref = '<refentry id="SQL-FOO"><refnamediv><refname>FOO</refname></refnamediv></refentry>'
+    titles = mod.collect_titles(ref, mod.collect_titles(other, {}))
+    monkeypatch.setattr(mod, "XREF_TITLES", titles)
+    assert mod.sgml_text('(see <xref linkend="other-page"/> for details)') == "(see The Other Page for details)"
+    assert mod.sgml_text('see <xref linkend="sql-foo"/>.') == "see FOO."
+
+
+def test_unresolved_xref_leaves_no_dangling_see(monkeypatch):
+    mod = load_script()
+    monkeypatch.setattr(mod, "XREF_TITLES", {})
+    monkeypatch.setattr(mod, "UNRESOLVED", [])
+    assert mod.sgml_text('Truncates (see <xref linkend="nope"/>) rows; see <xref linkend="nope"/>.') == "Truncates rows."
+
+
 MUST_HAVE = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE TABLE", "WITH", "WHERE",
              "GROUP BY", "HAVING", "ORDER BY", "LIMIT", "DISTINCT", "UNION", "JOIN",
              "LEFT JOIN", "LEFT OUTER JOIN", "INNER JOIN", "OUTER JOIN", "CASE", "COALESCE", "NULLIF",
@@ -237,11 +260,15 @@ def test_index_has_the_everyday_words():
 
 
 def test_every_entry_is_complete():
+    markup = re.compile(r"</?(%s)[ >/]" % "|".join(load_script().DOCBOOK_TAGS))
     for key, entries in INDEX["entries"].items():
         assert key == key.upper() and "  " not in key
         for e in entries:
             assert e["title"] and e["text"].strip()
-            assert not re.search(r"</?[a-z]+[ >/]|&[a-z]+;", e["text"])   # no leftover tags or entities
+            for field in ("text", "title", "synopsis"):
+                # no leftover DocBook markup or entities
+                assert not markup.search(e.get(field, "")), (key, field)
+                assert not re.search(r"&[a-z]+;", e.get(field, "")), (key, field)
             assert e["url"].startswith("https://www.postgresql.org/docs/17/")
 
 
@@ -254,6 +281,12 @@ def test_fragments_are_upper_case():
 
 def test_integer_comes_from_the_main_type_table():
     assert "four-byte" in INDEX["entries"]["INTEGER"][0]["text"]
+
+
+def test_no_empty_reference_leftovers():
+    for key, entries in INDEX["entries"].items():
+        for e in entries:
+            assert not re.search(r"\bsee\s+for\b|\bsee\s*[.;,)]|\(see\s*\)|\(\s+\)", e["text"]), (key, e["text"][:200])
 
 
 def test_reserved_words():
