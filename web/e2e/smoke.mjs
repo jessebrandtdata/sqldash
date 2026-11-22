@@ -265,6 +265,218 @@ async function aiPass(browser, matches, base) {
   const kept = await english.inputValue();
   assert(kept === "It reads t.xyy", `English holds "${kept}" after the summary was dismissed`);
   ok("15b", "words typed during the request survive a dismissed confirm on arrival");
+
+  // Assertions 16 to 26: English to SQL, the swap and the name boxes.
+  const counts = { sql: 0, summary: 0, judge: 0, names: 0, check: 0 };
+  let judgeBody = null;
+  page.on("request", (req) => {
+    const m = req.url().match(/api\/(sql|summary|judge|names|check)\b/);
+    if (!m) return;
+    counts[m[1]]++;
+    if (m[1] === "judge") judgeBody = req.postData();
+  });
+  const swapBtn = page.locator(".swap-btn");
+  const writeBtn = page.locator(".write-btn");
+  const origin = page.locator(".sql-origin");
+  const right = ".sql.readonly .cm-content";
+  const linesOf = (sel) => page.evaluate(
+    (s) => Array.from(document.querySelectorAll(s + " .cm-line")).map((l) => l.textContent).join("\n"),
+    sel,
+  );
+  const waitRight = (text) => page.waitForFunction(
+    ([s, t]) => Array.from(document.querySelectorAll(s + " .cm-line")).map((l) => l.textContent).join("\n") === t,
+    [right, text],
+    { timeout: 10000 },
+  ).catch(async () => { throw new Error(`right box never held ${JSON.stringify(text)}; it holds ${JSON.stringify(await linesOf(right))}`); });
+  const waitWriteEnabled = () => page.waitForFunction(
+    () => { const b = document.querySelector(".write-btn"); return b && !b.disabled; },
+    null,
+    { timeout: 10000 },
+  );
+  const settledSyntax = (text) => page.waitForFunction(
+    (t) => {
+      const el = document.querySelector(".syntax");
+      return el && el.textContent.includes(t) && !el.textContent.includes("checking");
+    },
+    text,
+    { timeout: 10000 },
+  ).catch(async () => { throw new Error(`syntax line never showed "${text}"; it shows "${await page.locator(".syntax").textContent()}"`); });
+  const boxNames = () => page.locator(".name-box").evaluateAll((els) => els.map((e) => `${e.dataset.kind}:${e.dataset.name}`));
+  const nameBox = (name) => page.locator(`.name-box[data-name="${name}"]`);
+  const originText = async () => (await origin.count() ? norm(await origin.textContent()) : "");
+  const waitOrigin = (text) => page.waitForFunction(
+    (t) => (document.querySelector(".sql-origin")?.textContent || "").replace(/\s+/g, " ").trim().includes(t),
+    text,
+    { timeout: 10000 },
+  ).catch(async () => { throw new Error(`sql label never showed "${text}"; it shows "${await originText()}"`); });
+  const FAKE_SQL = "SELECT name, salary\nFROM employees\nWHERE salary > 100";
+  const PAY_SQL = "SELECT name, pay\nFROM employees\nWHERE pay > 100";
+  const shotDir = process.env.SQLDASH_SMOKE_SHOTS;
+
+  // 16: swap carries both texts and calls no model
+  await replaceSql("select a from t");
+  await english.fill("some words here");
+  const m0 = { sql: counts.sql, summary: counts.summary, judge: counts.judge };
+  await swapBtn.click();
+  await page.waitForFunction(() => document.querySelector(".sql.readonly"), null, { timeout: 5000 });
+  assert((await english.inputValue()) === "some words here", `left box holds "${await english.inputValue()}"`);
+  assert((await linesOf(right)) === "select a from t", `right box holds "${await linesOf(right)}"`);
+  await nameBox("a").waitFor({ timeout: 10000 });
+  const b16 = await boxNames();
+  assert(b16.join() === "table:t,column:a", `name boxes are ${b16}`);
+  assert((await originText()) === "yours", `sql label reads "${await originText()}"`);
+  assert(counts.sql === m0.sql && counts.summary === m0.summary && counts.judge === m0.judge, "swap called a model route");
+  ok(16, "swap carries both texts, shows boxes for t and a, label yours, no model route called");
+
+  // 17: Write SQL asks before replacing the user's own SQL
+  await english.fill("people paid over 100");
+  dialogAction = "dismiss";
+  const dl = dialogs.length;
+  await writeBtn.click();
+  await page.waitForTimeout(600);
+  assert(dialogs.length === dl + 1 && dialogs[dl] === "Replace the SQL you wrote with AI-written SQL?", `dialogs: ${JSON.stringify(dialogs.slice(dl))}`);
+  assert(counts.sql === m0.sql, "dismissing the confirm still sent a request");
+  assert((await linesOf(right)) === "select a from t", "dismissing the confirm changed the right box");
+  dialogAction = "accept";
+  await writeBtn.click();
+  await waitRight(FAKE_SQL);
+  await waitWriteEnabled();
+  await waitOrigin("AI SQL");
+  assert((await originText()) === "AI SQL · fake-sql-model · 13 in / 9 out tokens", `sql label reads "${await originText()}"`);
+  await settledSyntax("OK (exact, PostgreSQL 17 parser)");
+  await nameBox("salary").waitFor({ timeout: 10000 });
+  const b17 = await boxNames();
+  assert(b17.join() === "table:employees,column:name,column:salary", `name boxes are ${b17}`);
+  ok(17, "Write SQL confirms first, then shows three lines, the label, OK syntax and the names");
+
+  // 18: a name edit changes every occurrence and re-checks
+  const k0 = { check: counts.check, sql: counts.sql, summary: counts.summary, judge: counts.judge };
+  await nameBox("salary").fill("pay");
+  await waitRight(PAY_SQL);
+  await settledSyntax("OK (exact");
+  assert(counts.check === k0.check + 1, `expected 1 more api/check, saw ${counts.check - k0.check}`);
+  assert(counts.sql === k0.sql && counts.summary === k0.summary && counts.judge === k0.judge, "a name edit called a model route");
+  await nameBox("salary").fill("");
+  await waitRight(FAKE_SQL);
+  await nameBox("salary").blur();
+  assert((await nameBox("salary").inputValue()) === "salary", `cleared box shows "${await nameBox("salary").inputValue()}"`);
+  await nameBox("salary").fill("pay");
+  await waitRight(PAY_SQL);
+  await settledSyntax("OK (exact");
+  if (shotDir) {
+    mkdirSync(shotDir, { recursive: true });
+    await page.screenshot({ path: join(shotDir, "e2s-wide.png"), fullPage: true });
+  }
+  ok(18, "renaming salary to pay changes both places and re-checks; clearing restores it; no model route");
+
+  // 19: editing the description marks the SQL
+  await english.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" now");
+  await waitOrigin("· the description has changed since");
+  ok(19, "editing the description marks the AI SQL label");
+
+  // 20: a second Write SQL replaces model-written SQL without asking and re-applies the edit
+  const d20 = dialogs.length;
+  const s20 = counts.sql;
+  await writeBtn.click();
+  await page.waitForFunction(() => document.querySelector(".write-btn")?.disabled, null, { timeout: 2000 }).catch(() => {});
+  await waitWriteEnabled();
+  await waitRight(PAY_SQL);
+  assert(dialogs.length === d20, `a dialog appeared: ${JSON.stringify(dialogs.slice(d20))}`);
+  assert(counts.sql === s20 + 1, `expected 1 more api/sql, saw ${counts.sql - s20}`);
+  assert((await nameBox("salary").inputValue()) === "pay", `salary box shows "${await nameBox("salary").inputValue()}"`);
+  assert(!(await originText()).includes("has changed since"), `label still stale: "${await originText()}"`);
+  ok(20, "second Write SQL asks nothing, sends one request, re-applies pay");
+
+  // 21: Jev works in this direction
+  await settledSyntax("OK (exact");
+  await page.locator(".judge-btn").click();
+  await verdict.waitFor({ timeout: 10000 });
+  const v21 = norm(await verdict.textContent());
+  assert(v21.includes("differs") && v21.includes("87%"), `verdict shows "${v21}"`);
+  const sentSql = JSON.parse(judgeBody).sql;
+  assert(sentSql === PAY_SQL, `Jev was sent ${JSON.stringify(sentSql)}`);
+  await nameBox("salary").fill("pays");
+  await page.waitForFunction(() => !document.querySelector(".verdict"), null, { timeout: 5000 });
+  await nameBox("salary").fill("pay");
+  await waitRight(PAY_SQL);
+  await settledSyntax("OK (exact");
+  ok(21, "Jev shows differs · 87% on the SQL as shown; a name edit removes the verdict");
+
+  // 22: reload restores it
+  await page.reload();
+  await page.locator(".sql.readonly .cm-content").waitFor();
+  await nameBox("salary").waitFor({ timeout: 10000 });
+  await waitRight(PAY_SQL);
+  assert((await nameBox("salary").inputValue()) === "pay", `salary box shows "${await nameBox("salary").inputValue()}"`);
+  assert((await english.inputValue()) === "people paid over 100 now", `description holds "${await english.inputValue()}"`);
+  assert((await originText()) === "AI SQL", `sql label reads "${await originText()}"`);
+  ok(22, "reload restores the description, the pay SQL, the direction, the pay box and the AI SQL label");
+
+  // 23: a vague description and a refusal
+  await english.fill("vague");
+  await writeBtn.click();
+  await page.locator(".sql-note").waitFor({ timeout: 10000 });
+  await waitWriteEnabled();
+  assert(norm(await page.locator(".sql-note").textContent()) === "Say which table to read.", "vague note is wrong");
+  assert((await linesOf(right)) === "", `right box holds "${await linesOf(right)}"`);
+  assert((await page.locator(".name-box").count()) === 0, "name boxes remain for an empty SQL");
+  assert((await page.locator(".syntax").textContent()).trim() === "", `syntax line reads "${await page.locator(".syntax").textContent()}"`);
+  await english.fill("refuse");
+  await writeBtn.click();
+  await page.locator(".sql-err").waitFor({ timeout: 10000 });
+  assert(norm(await page.locator(".sql-err").textContent()) === "The model declined to answer for this text.", "refusal sentence is wrong");
+  await waitWriteEnabled();
+  assert((await linesOf(right)) === "" && norm(await page.locator(".sql-note").textContent()) === "Say which table to read.", "a refusal changed the page");
+  ok(23, "vague shows the note and no boxes; refuse shows its sentence and changes nothing else");
+
+  // 24: swap back puts the shown SQL on the left as plain text
+  await english.fill("people paid over 100");
+  await writeBtn.click();
+  await waitRight(PAY_SQL);
+  await waitWriteEnabled();
+  await swapBtn.click();
+  await editor.waitFor({ timeout: 5000 });
+  assert((await linesOf(".cm-content")) === PAY_SQL, `editor holds "${await linesOf(".cm-content")}"`);
+  assert((await page.locator(".names").count()) === 0 && (await page.locator(".name-box").count()) === 0, "name boxes remain after swapping back");
+  assert((await english.inputValue()) === "people paid over 100", `English box holds "${await english.inputValue()}"`);
+  await appendSql(" limit 5");
+  const typed = await linesOf(".cm-content");
+  assert(typed === PAY_SQL + " limit 5", `editor holds "${typed}" after typing`);
+  await swapBtn.click();
+  await page.waitForFunction(() => document.querySelector(".sql.readonly"), null, { timeout: 5000 });
+  await swapBtn.click();
+  await editor.waitFor({ timeout: 5000 });
+  assert((await linesOf(".cm-content")) === typed && (await english.inputValue()) === "people paid over 100", "two more swaps changed the texts");
+  ok(24, "swap back shows the SQL as plain text on the left; two more swaps keep both texts");
+
+  // 25: while Write SQL is in flight both buttons are off and a second click sends nothing
+  await swapBtn.click();
+  await page.waitForFunction(() => document.querySelector(".sql.readonly"), null, { timeout: 5000 });
+  await english.fill("slow people");
+  dialogAction = "accept";
+  const s25 = counts.sql;
+  await writeBtn.click();
+  const wOff = await writeBtn.isDisabled();
+  const sOff = await swapBtn.isDisabled();
+  await writeBtn.click({ force: true, timeout: 2000 }).catch(() => {});
+  await waitWriteEnabled();
+  assert(wOff && sOff, `during the request write disabled=${wOff}, swap disabled=${sOff}`);
+  assert(counts.sql === s25 + 1, `expected 1 api/sql request, saw ${counts.sql - s25}`);
+  ok(25, "Write SQL and swap are disabled in flight and no second request goes out");
+
+  // 26: narrow layout puts the swap button between the boxes
+  await page.setViewportSize({ width: 500, height: 900 });
+  await page.waitForTimeout(200);
+  const rects = await page.evaluate(() => {
+    const r = (el) => { const b = el.getBoundingClientRect(); return { top: b.top, bottom: b.bottom }; };
+    const panes = document.querySelectorAll(".boxes > .pane");
+    return { a: r(panes[0]), btn: r(document.querySelector(".swap-btn")), b: r(panes[panes.length - 1]) };
+  });
+  assert(rects.a.bottom <= rects.btn.top && rects.btn.bottom <= rects.b.top, `swap button is not between the boxes: ${JSON.stringify(rects)}`);
+  if (shotDir) await page.screenshot({ path: join(shotDir, "e2s-narrow.png"), fullPage: true });
+  ok(26, "at 500 px the swap button lies between the two boxes");
   await context.close();
 }
 
@@ -290,7 +502,7 @@ async function main() {
       return route.continue();
     });
     page.on("request", (req) => {
-      if (/api\/(summary|judge)/.test(req.url())) aiRequests.push(req.url());
+      if (/api\/(summary|judge|sql)/.test(req.url())) aiRequests.push(req.url());
     });
     const syntax = page.locator(".syntax");
     const settled = (text) => page.waitForFunction(
@@ -382,7 +594,18 @@ async function main() {
 
     // 7: no AI request was made
     assert(aiRequests.length === 0, `AI requests seen: ${aiRequests.join(", ")}`);
-    ok(7, "no request to api/summary or api/judge");
+    ok(7, "no request to api/summary, api/judge or api/sql");
+
+    // 3b: Write SQL is off without its key and names the missing variable; swap, look, swap back
+    await page.locator(".swap-btn").click();
+    await page.locator(".write-btn").waitFor({ timeout: 5000 });
+    assert(await page.locator(".write-btn").isDisabled(), "Write SQL is enabled without its key");
+    const missing = norm(await page.locator(".sql-missing").textContent());
+    assert(missing === "ANTHROPIC_API_KEY is not set, so this button is off.", `sql-missing reads "${missing}"`);
+    await page.locator(".swap-btn").click();
+    await editor.waitFor({ timeout: 5000 });
+    assert(aiRequests.length === 0, `AI requests seen after swapping: ${aiRequests.join(", ")}`);
+    ok("3b", "Write SQL is off with ANTHROPIC_API_KEY named; swapping sends no AI request");
 
     // 7b: an unfinished statement is reported at the end of the text, with a lint marker
     await editor.click();

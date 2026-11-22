@@ -1,6 +1,6 @@
-"""The smoke test's stand-in for the two paid services (Claude and Jev).
+"""The smoke test's stand-in for the paid services (Claude and Jev).
 
-Serves the real page and the real syntax check; the summary, the agreement check and the
+Serves the real page and the real syntax check; the summary, the SQL writer, the agreement check and the
 capabilities are fakes that spend nothing. Never imported by the app. Usage: fake_server.py [port]
 """
 import sys
@@ -32,18 +32,40 @@ def fake_judge(sql, english, dialect):
     }
 
 
+def fake_generate(english, dialect):
+    # "refuse" raises a refusal; "vague" returns no SQL and a note; anything else returns fixed SQL.
+    if "refuse" in english:
+        raise errors.ServiceError("refusal")
+    if "vague" in english:
+        time.sleep(0.3)
+        return {"sql": "", "note": "Say which table to read.", "model": "fake-sql-model", "input_tokens": 13, "output_tokens": 9}
+    time.sleep(1.5 if "slow" in english else 0.3)
+    return {
+        "sql": "SELECT name, salary\nFROM employees\nWHERE salary > 100",
+        "note": "",
+        "model": "fake-sql-model",
+        "input_tokens": 13,
+        "output_tokens": 9,
+    }
+
+
 def fake_capabilities():
-    # The real answer for an empty environment with both buttons switched on.
+    # The real answer for an empty environment with all three buttons switched on.
     c = caps.capabilities({})
     c["summary"] = {**c["summary"], "available": True, "missing": None}
     c["judge"] = {**c["judge"], "available": True, "missing": None}
+    c["sql"] = {**c["sql"], "available": True, "missing": None}
     return c
 
 
 def main(argv):
     port = int(argv[0]) if argv else 0
     services = server.Services(
-        check=checker.check, summarize=fake_summarize, judge=fake_judge, capabilities=fake_capabilities
+        check=checker.check,
+        summarize=fake_summarize,
+        judge=fake_judge,
+        generate=fake_generate,
+        capabilities=fake_capabilities,
     )
     srv = server.make_server("127.0.0.1", port, ROOT / "dist", services)
     print(f"sqldash on http://127.0.0.1:{srv.server_address[1]}", flush=True)

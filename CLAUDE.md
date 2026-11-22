@@ -7,7 +7,7 @@ Spec: `specs:sqldash/specs/2026-11-21-sqldash-design.md`, `specs:sqldash/specs/2
 - `serve [host] [port]` runs `python3 -m sqldash.server` (default 127.0.0.1:8096).
 - `sqldash/` is the stdlib server: `server.py` (routes, static `dist/`, `main`), `checker.py` (syntax check: pglast for `postgres`, sqlglot for `mysql`, `redshift`, `athena`), `summary.py` (Claude), `judge.py` (Jev), `generate.py` (Claude, English to SQL), `names.py` (table and column names with positions; sqlglot for every dialect), `caps.py`, `dialects.py`, `errors.py`, `envfile.py` (key file loader), `theme.py`, `words.py`.
 - `web/` is the Svelte source (`src/`, `tests/*.test.js`, `scripts/source-hash.js`, `public/docs/`); `dist/` is its build, committed.
-- `web/e2e/smoke.mjs` is a headless-browser smoke test; `web/e2e/fake_server.py` is its stand-in for the two paid services.
+- `web/e2e/smoke.mjs` is a headless-browser smoke test; `web/e2e/fake_server.py` is its stand-in for the paid services.
 - `scripts/build_pgdocs.py` builds `pg17.json`; `scripts/check_links.py` checks doc links with plain `curl`.
 - `tests/` is pytest. `check` is the merge gate; `deploy-hook` is the box's install step.
 
@@ -24,10 +24,10 @@ Spec: `specs:sqldash/specs/2026-11-21-sqldash-design.md`, `specs:sqldash/specs/2
 
 - Rebuild and commit `dist/` after any `web/` edit (`web/scripts/source-hash.js` fails `check` on drift).
 - Model-facing strings live only in `sqldash/words.py`, copied verbatim from the spec.
-- No AI call without a click; no key in the page, the repo, a response or a log.
+- No AI call without a click (AI summary, Jev, Write SQL); no key in the page, the repo, a response or a log.
 - Route and static names never contain `stat`, `track`, `collect`, `pixel`, `beacon`, `analytics`, `pageview` or `ads`.
 - Only `scripts/build_pgdocs.py` produces `pg17.json`; its text is never hand-written.
-- The SQL box is changed only by the user's keyboard.
+- The left box is changed only by the user's keyboard and the swap button; generated SQL appears only in the right box.
 - `checker.py`, `summary.py`, `judge.py`, `names.py` and `generate.py` import their third-party package inside the function that uses it, so `import sqldash.server` works on a box without them; test modules `pytest.importorskip` each dep.
 - AI calls refuse SQL over 50,000 characters; never truncate.
 - No person's name in source: docs say "the user" and "the maintainer" (`tests/test_identity.py`).
