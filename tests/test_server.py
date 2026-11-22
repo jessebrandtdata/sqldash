@@ -1,5 +1,8 @@
 import http.client
 import json
+import pathlib
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -18,6 +21,8 @@ class Fakes:
         self.check_fn = lambda sql, dialect: {"ok": True, "sql": sql, "dialect": dialect}
         self.summarize_fn = lambda sql, dialect: {"summary": "s"}
         self.judge_fn = lambda sql, english, dialect: {"verdict": "v"}
+        self.generate_fn = lambda english, dialect: {"sql": "select 1", "note": ""}
+        self.names_fn = lambda sql, dialect: {"ok": True, "names": []}
 
     def services(self):
         def check(sql, dialect):
@@ -33,10 +38,22 @@ class Fakes:
             self.service_calls += 1
             return self.judge_fn(sql, english, dialect)
 
+        def generate(english, dialect):
+            self.service_calls += 1
+            self.calls.append(("generate", english, dialect))
+            return self.generate_fn(english, dialect)
+
+        def names(sql, dialect):
+            self.service_calls += 1
+            self.calls.append(("names", sql, dialect))
+            return self.names_fn(sql, dialect)
+
         return server.Services(
             check=check,
             summarize=summarize,
             judge=judge,
+            generate=generate,
+            names=names,
             capabilities=lambda: {"caps": True},
         )
 
@@ -456,3 +473,84 @@ def test_stalled_client_is_dropped_without_a_traceback(dist, fakes, capsys):
         srv.shutdown()
         srv.server_close()
     assert "Traceback" not in capsys.readouterr().err
+
+
+def test_sql_route_passes_fields_in_order(base, fakes):
+    fakes.generate_fn = lambda english, dialect: {"sql": "select * from t", "note": "n"}
+    status, _, body = post(base + "/api/sql", {"english": "all of t", "dialect": "mysql", "extra": 1})
+    assert status == 200
+    assert body == {"sql": "select * from t", "note": "n"}
+    assert fakes.calls == [("generate", "all of t", "mysql")]
+
+
+def test_sql_route_service_error(base, fakes):
+    def boom(english, dialect):
+        raise ServiceError("missing_key", "ANTHROPIC_API_KEY")
+
+    fakes.generate_fn = boom
+    status, _, body = post(base + "/api/sql", {"english": "x", "dialect": "postgres"})
+    assert status == 503
+    assert body == {"error": {"kind": "missing_key", "message": "ANTHROPIC_API_KEY is not set, so this button is off."}}
+
+
+def test_names_route(base, fakes):
+    fakes.names_fn = lambda sql, dialect: {"ok": True, "names": [{"name": "a"}]}
+    status, _, body = post(base + "/api/names", {"sql": "select a from t", "dialect": "postgres"})
+    assert status == 200
+    assert body == {"ok": True, "names": [{"name": "a"}]}
+    assert fakes.calls == [("names", "select a from t", "postgres")]
+
+
+def test_names_route_unknown_dialect_is_bad_request(base, fakes):
+    def boom(sql, dialect):
+        raise ValueError("unknown dialect")
+
+    fakes.names_fn = boom
+    status, _, body = post(base + "/api/names", {"sql": "x", "dialect": "nope"})
+    assert status == 400 and body["error"]["kind"] == "bad_request"
+
+
+NEW_ROUTES = {
+    "/api/sql": {"english": "all of t", "dialect": "postgres"},
+    "/api/names": {"sql": "select 1", "dialect": "postgres"},
+}
+
+
+@pytest.mark.parametrize("path", sorted(NEW_ROUTES))
+def test_new_routes_reject_bad_bodies(base, fakes, path):
+    good = NEW_ROUTES[path]
+    first = next(iter(good))
+    missing = {k: v for k, v in good.items() if k != first}
+    non_string = {**good, first: 1}
+    for payload in (json.dumps(missing), json.dumps(non_string), "[]"):
+        status, _, body = raw(base, "POST", path, JSON, payload.encode())
+        assert status == 400 and body["error"]["kind"] == "bad_request", payload
+    status, _, body = raw(base, "POST", path, {"Content-Type": "text/plain"}, json.dumps(good).encode())
+    assert status == 400 and body["error"]["kind"] == "bad_request"
+    assert fakes.service_calls == 0
+
+
+@pytest.mark.parametrize("path", sorted(NEW_ROUTES))
+def test_new_routes_refuse_a_foreign_host(base, fakes, path):
+    status, _, body = raw(base, "POST", path, JSON, json.dumps(NEW_ROUTES[path]).encode(), host="evil.example")
+    assert status == 403 and body["error"]["kind"] == "forbidden"
+    assert fakes.service_calls == 0
+
+
+def test_server_imports_without_the_optional_packages():
+    code = (
+        "import sys; sys.modules['sqlglot'] = None; sys.modules['anthropic'] = None; "
+        "sys.modules['pglast'] = None; import sqldash.server, sqldash.names, sqldash.generate"
+    )
+    root = pathlib.Path(__file__).resolve().parents[1]
+    done = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+
+
+def test_log_line_for_sql_route_has_no_body_text(base, fakes, capsys):
+    status, _, _ = post(base + "/api/sql", {"english": "SECRETWORD please", "dialect": "postgres"})
+    assert status == 200
+    time.sleep(0.1)
+    err = capsys.readouterr().err
+    assert err.strip() == "POST /api/sql 200"
+    assert "SECRETWORD" not in err

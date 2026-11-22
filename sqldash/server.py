@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote, urlsplit
 
-from . import caps, checker, envfile, errors, judge, summary, theme
+from . import caps, checker, envfile, errors, generate, judge, names, summary, theme
 
 MAX_BODY = 1_048_576
 DRAIN_LIMIT = 8 * 1024 * 1024
@@ -36,6 +36,8 @@ ROUTES = {
     ("POST", "/api/check"): "_route_check",
     ("POST", "/api/summary"): "_route_summary",
     ("POST", "/api/judge"): "_route_judge",
+    ("POST", "/api/sql"): "_route_sql",
+    ("POST", "/api/names"): "_route_names",
     ("GET", "/theme.css"): "_route_theme",
 }
 
@@ -44,6 +46,8 @@ FIELDS = {
     "/api/check": ("sql", "dialect"),
     "/api/summary": ("sql", "dialect"),
     "/api/judge": ("sql", "english", "dialect"),
+    "/api/sql": ("english", "dialect"),
+    "/api/names": ("sql", "dialect"),
 }
 
 
@@ -56,6 +60,8 @@ class Services:
     judge: Callable = field(
         default=lambda sql, english, dialect: judge.judge(sql, english, dialect, environ=os.environ)
     )
+    generate: Callable = field(default=lambda english, dialect: generate.generate(english, dialect, environ=os.environ))
+    names: Callable = names.read_names
     capabilities: Callable = field(default=lambda: caps.capabilities(os.environ))
 
 
@@ -266,6 +272,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _route_judge(self):
         self._json(200, self.services.judge(*self._fields()))
+
+    def _route_sql(self):
+        self._json(200, self.services.generate(*self._fields()))
+
+    def _route_names(self):
+        self._json(200, self.services.names(*self._fields()))
 
     def _route_theme(self):
         self._send(200, theme.theme_css().encode(), "text/css; charset=utf-8", {"Cache-Control": "no-store"})
