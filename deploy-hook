@@ -1,0 +1,6 @@
+#!/bin/sh
+# Install the runtime Python deps for the host user; runs under systemd's bare PATH.
+set -e
+export PATH="$HOME/.local/bin:$PATH"
+cd "$(dirname "$0")"
+python3 -m pip install --user --break-system-packages -q -r requirements.txt
