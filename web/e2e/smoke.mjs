@@ -318,6 +318,21 @@ async function main() {
     });
     ok(1, "typed error shows line 1, col 10, (exact) and a lint marker");
 
+    // 1b: the focused SQL box shows a caret in the text colour and a focus ring that is not clipped
+    const seen = await page.evaluate(() => {
+      const content = document.querySelector(".cm-content");
+      const box = document.querySelector(".sql");
+      return {
+        caret: getComputedStyle(content).caretColor,
+        text: getComputedStyle(content).color,
+        ring: getComputedStyle(box).outlineStyle,
+        ringWidth: parseFloat(getComputedStyle(box).outlineWidth),
+      };
+    });
+    assert(seen.caret === seen.text, `SQL caret is ${seen.caret} but the text is ${seen.text}`);
+    assert(seen.ring !== "none" && seen.ringWidth >= 1, `focused SQL box has no ring (outline ${seen.ring} ${seen.ringWidth}px)`);
+    ok("1b", "focused SQL box shows its caret in the text colour and a focus ring");
+
     // 2: MySQL verdicts are approximate
     await page.selectOption("select", "mysql");
     await settled("(approximate)");

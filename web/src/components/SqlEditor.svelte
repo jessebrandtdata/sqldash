@@ -110,6 +110,9 @@
   .sql :global(.cm-scroller) { font-family: var(--sd-mono); font-size: 0.9rem; overflow: auto; }
   .sql :global(.cm-gutters) { background: var(--sd-panel); color: var(--sd-dim); border-right: 1px solid var(--sd-edge); }
   .sql :global(.cm-activeLine) { background: transparent; }
-  .sql :global(.cm-cursor) { border-left-color: var(--sd-text); }
-  .sql :global(.cm-focused) { outline: 2px solid var(--sd-accent); }
+  /* The caret takes the text colour; the editor's own default is black, which a dark page hides. */
+  .sql :global(.cm-content) { caret-color: var(--sd-text); }
+  /* The ring sits on the box itself, because the box clips anything its editor draws outside it. */
+  .sql:focus-within { outline: 2px solid var(--sd-accent); outline-offset: -1px; }
+  .sql :global(.cm-focused) { outline: none; }
 </style>
