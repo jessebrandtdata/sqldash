@@ -9,8 +9,9 @@
   import { linter, lintGutter, setDiagnostics } from "@codemirror/lint";
   import { lineColToOffset } from "../lib/position.js";
 
-  // `value` is read once, at mount; after that only the user's typing changes the text.
-  let { value, dialect, error, onchange, oncursor, onrun } = $props();
+  // Editable: `value` is read once, at mount; after that only the user's typing changes the text.
+  // Read-only: the document follows `value` and `onchange` is never called.
+  let { value, dialect, error, onchange, oncursor, onrun, readonly = false } = $props();
 
   let host;
   let view;
@@ -71,11 +72,12 @@
             ...defaultKeymap,
             ...historyKeymap,
           ]),
+          ...(readonly ? [EditorState.readOnly.of(true)] : []),
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) onchange(u.state.doc.toString());
+            if (u.docChanged && !readonly) onchange(u.state.doc.toString());
             if (u.docChanged || u.selectionSet) oncursor(u.state.selection.main.head);
           }),
-          EditorView.contentAttributes.of({ "aria-label": "SQL" }),
+          EditorView.contentAttributes.of({ "aria-label": readonly ? "SQL (read-only)" : "SQL" }),
         ],
       }),
     });
@@ -89,14 +91,23 @@
     if (view) view.dispatch({ effects: language.reconfigure(langFor(id)) });
   });
 
-  // Shows the error marker, or clears it.
+  // In read-only mode, replaces the whole document when the value prop differs from it.
+  $effect(() => {
+    const text = value;
+    if (readonly && view && view.state.doc.toString() !== text) {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+    }
+  });
+
+  // Shows the error marker, or clears it; read-only mode also redraws it when the text is replaced.
   $effect(() => {
     const err = error;
+    if (readonly) void value;
     if (view) view.dispatch(setDiagnostics(view.state, diagnostics(view.state.doc.toString(), err)));
   });
 </script>
 
-<div class="sql" bind:this={host}></div>
+<div class={readonly ? "sql readonly" : "sql"} bind:this={host}></div>
 
 <style>
   .sql {

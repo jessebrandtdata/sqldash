@@ -20,7 +20,7 @@ STATUS: dict[str, int] = {
 
 _SENTENCES: dict[str, str] = {
     "empty": "Nothing to send: the box is empty.",
-    "too_long": "This SQL is over 50,000 characters, which is the limit for the AI calls.",
+    "too_long": "This text is over 50,000 characters, which is the limit for the AI calls.",
     "bad_request": "The request was not understood.",
     "forbidden": "sqldash does not answer to this address. Add its name to SQLDASH_ALLOWED_HOSTS.",
     "not_found": "There is nothing at that address.",

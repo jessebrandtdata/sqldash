@@ -8,7 +8,7 @@ from .errors import ServiceError
 KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 
-def _map_sdk_error(anthropic, exc):
+def map_sdk_error(anthropic, exc):
     # Turn an SDK exception into a ServiceError by its type, never by its message.
     if isinstance(exc, anthropic.AuthenticationError):
         return ServiceError("bad_key", "ANTHROPIC_API_KEY")
@@ -55,7 +55,7 @@ def summarize(sql, dialect, *, environ=os.environ, client=None):
     except ServiceError:
         raise
     except Exception as exc:
-        mapped = _map_sdk_error(anthropic, exc) if anthropic is not None else None
+        mapped = map_sdk_error(anthropic, exc) if anthropic is not None else None
         if mapped is None:
             raise
         raise mapped from None
