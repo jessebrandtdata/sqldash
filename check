@@ -1,0 +1,12 @@
+#!/bin/sh
+# Merge gate. No network. Python suites skip by named substrate where a dep is absent.
+set -e
+cd "$(dirname "$0")"
+for m in pglast sqlglot anthropic typesafe_sdk; do
+  python3 -c "import $m" 2>/dev/null || echo "SKIP: $m not installed here, its suites skip"
+done
+if python3 -c 'import pytest' 2>/dev/null; then python3 -m pytest -q tests
+else echo "SKIP: pytest not installed here, Python suites not run"; fi
+node --test web/tests/*.test.js
+node web/scripts/source-hash.js check
+echo check ok
