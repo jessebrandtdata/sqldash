@@ -11,7 +11,11 @@ export function lineColToOffset(text, line, col) {
   if (end === -1) end = text.length;
   // A CR before the line break is part of the break, not the line.
   if (end > start && text[end - 1] === "\r") end -= 1;
-  const offset = start + Math.max(col, 1) - 1;
+  // Walk the line one code point at a time, as the server counts columns.
+  let offset = start;
+  for (let c = 1; c < col && offset < end; c++) {
+    offset += text.codePointAt(offset) > 0xffff ? 2 : 1;
+  }
   return Math.min(offset, end);
 }
 

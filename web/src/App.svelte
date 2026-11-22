@@ -62,6 +62,8 @@
   async function runCheck() {
     clearTimeout(timer);
     if (s.sql.trim() === "") {
+      // An empty box supersedes any check still in flight, so an old answer never lands.
+      await check(Promise.resolve(null));
       s = { ...s, check: null };
       return;
     }
@@ -76,6 +78,8 @@
   }
 
   function onSql(text) {
+    summaryErr = "";
+    judgeErr = "";
     s = editSql(s, text);
     persist();
     clearTimeout(timer);
@@ -83,11 +87,15 @@
   }
 
   function onEnglish(text) {
+    summaryErr = "";
+    judgeErr = "";
     s = editEnglish(s, text);
     persist();
   }
 
   function onDialect(e) {
+    summaryErr = "";
+    judgeErr = "";
     s = setDialect(s, e.currentTarget.value);
     persist();
     runCheck();
@@ -99,12 +107,15 @@
     summaryBusy = true;
     summaryErr = "";
     const sent = { sql: s.sql, dialect: s.dialect };
+    const englishSent = s.english;
     const r = await post("api/summary", sent);
     summaryBusy = false;
     if (!r.ok) {
       summaryErr = r.message;
       return;
     }
+    // Words typed while the request was out are asked about again before they are replaced.
+    if (s.english !== englishSent && needsConfirm(s) && !window.confirm("Replace what you wrote with an AI summary?")) return;
     s = applySummary(s, r.data);
     persist();
     if (s.sql !== sent.sql || s.dialect !== sent.dialect) s = summaryOutdated(s);

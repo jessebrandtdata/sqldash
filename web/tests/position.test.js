@@ -57,3 +57,12 @@ test("candidates: windows do not reach across a comment or string", () => {
   assert.deepEqual(candidates("select /* c */ a", 15), ["A"]);
   assert.deepEqual(candidates("a 'x' b", 0), ["A"]);
 });
+
+test("lineColToOffset counts code points, so an emoji earlier on the line does not shift the marker", () => {
+  const text = "select '😀', x frm t";
+  // Python counts the emoji as one place, so frm starts at 1-based column 15
+  assert.equal(lineColToOffset(text, 1, 15), text.indexOf("frm"));
+  assert.equal(lineColToOffset("😀😀x", 1, 3), 4);
+  assert.equal(lineColToOffset("😀a\n😀b", 2, 2), 4 + 2);
+  assert.equal(lineColToOffset("😀", 1, 99), 2);
+});

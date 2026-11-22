@@ -1,4 +1,4 @@
-// Writes (or checks) dist/.source-hash: sha256 over web/src, web/index.html, web/public and web/package.json.
+// Writes (or checks) dist/.source-hash: sha256 over web/src, web/index.html, web/public, web/package.json, web/package-lock.json and web/vite.config.js.
 // Usage: node scripts/source-hash.js write | check
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
@@ -22,6 +22,8 @@ const files = [
   join(web, "index.html"),
   ...walk(join(web, "public")),
   join(web, "package.json"),
+  join(web, "package-lock.json"),
+  join(web, "vite.config.js"),
 ];
 const h = createHash("sha256");
 for (const f of files) {

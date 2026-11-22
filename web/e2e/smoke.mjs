@@ -245,6 +245,26 @@ async function aiPass(browser, matches, base) {
   const finalSql = await editor.textContent();
   assert(finalSql === "select a from t", `SQL box holds "${finalSql}"`);
   ok(15, "SQL box holds exactly what was typed");
+
+  // 15b: words typed while a summary loads are asked about again when the answer arrives
+  await replaceSql("select slow from t");
+  await english.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("x");
+  await page.waitForFunction(() => (document.querySelector(".origin")?.textContent || "").trim() === "yours");
+  dialogAction = "accept";
+  const d0 = dialogs.length;
+  await summaryBtn.click();
+  assert(dialogs.length === d0 + 1, `the pre-send confirm did not appear: ${JSON.stringify(dialogs.slice(d0))}`);
+  await english.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("yy");
+  dialogAction = "dismiss";
+  await waitEnabled();
+  assert(dialogs.length === d0 + 2 && dialogs[d0 + 1] === dialogs[0], `no second confirm on arrival: ${JSON.stringify(dialogs.slice(d0))}`);
+  const kept = await english.inputValue();
+  assert(kept === "It reads t.xyy", `English holds "${kept}" after the summary was dismissed`);
+  ok("15b", "words typed during the request survive a dismissed confirm on arrival");
   await context.close();
 }
 
@@ -348,6 +368,16 @@ async function main() {
     // 7: no AI request was made
     assert(aiRequests.length === 0, `AI requests seen: ${aiRequests.join(", ")}`);
     ok(7, "no request to api/summary or api/judge");
+
+    // 7b: an unfinished statement is reported at the end of the text, with a lint marker
+    await editor.click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.type("select (");
+    await settled("line 1, col 9: syntax error at end of input (exact)");
+    await page.locator(".cm-lintRange-error").first().waitFor({ timeout: 5000 }).catch(() => {
+      throw new Error("no lint marker for the end-of-input error");
+    });
+    ok("7b", "typing 'select (' shows line 1, col 9: syntax error at end of input (exact) and a lint marker");
 
     // Second pass: the same page against fake services, in a light colour scheme.
     child.kill("SIGTERM");

@@ -31,7 +31,7 @@
   // Builds the one lint diagnostic for an error position, or none.
   function diagnostics(text, err) {
     if (!err || !err.line || !err.col) return [];
-    const from = lineColToOffset(text, err.line, err.col);
+    let from = lineColToOffset(text, err.line, err.col);
     let to;
     if (err.end_col) {
       to = lineColToOffset(text, err.line, err.end_col);
@@ -39,7 +39,15 @@
       to = from;
       while (to < text.length && /[A-Za-z0-9_]/.test(text[to])) to++;
     }
-    if (to <= from) to = Math.min(from + 1, text.length);
+    if (to <= from) {
+      // Nothing to mark at the end of the text or on whitespace: mark the character before it.
+      if (from >= text.length || /\s/.test(text[from])) {
+        to = from;
+        from = Math.max(0, from - 1);
+      } else {
+        to = from + 1;
+      }
+    }
     if (to <= from) return [];
     return [{ from, to, severity: "error", message: err.message || "syntax error" }];
   }
