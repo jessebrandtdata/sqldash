@@ -65,7 +65,9 @@
     display: block;
     width: 100%;
     max-width: 24rem;
-    padding: 0.25rem 0.5rem;
+    padding: 0.2rem 0.5rem;
+    /* An input's default line height clips the underscore of a name at 1x. */
+    line-height: 1.5;
     border: 1px solid var(--sd-edge);
     border-radius: 4px;
     background: var(--sd-bg);

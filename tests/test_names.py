@@ -298,3 +298,42 @@ def test_delete_using_a_cte_follows_its_columns():
         ("table", "logs", None, ["logs", "logs", "logs"]),
         ("column", "id", "logs", ["id", "id", "id"]), ("column", "ts", "logs", ["ts"]),
     ])
+
+
+def test_an_alias_beside_a_star_is_not_passed_through():
+    sql = ("WITH x AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS rn "
+           "FROM orders) SELECT id, rn FROM x WHERE rn = 1")
+    assert sorted(read(sql)) == sorted([
+        ("column", "customer_id", "orders", ["customer_id"]), ("column", "created_at", "orders", ["created_at"]),
+        ("table", "orders", None, ["orders"]), ("column", "id", "orders", ["id"]),
+    ])
+    got = read("WITH x AS (SELECT *, salary * 2 AS pay2 FROM emp) SELECT name, pay2 FROM x ORDER BY pay2")
+    assert "pay2" not in [n for k, n, t, s in got]
+    assert ("column", "name", "emp", ["name"]) in got
+
+
+def test_order_by_reads_a_select_alias_before_a_column_of_the_same_name():
+    got = read("SELECT dept, SUM(amount) AS amount FROM sales GROUP BY dept ORDER BY amount DESC")
+    assert ("column", "amount", "sales", ["amount"]) in got
+    assert ("column", "dept", "sales", ["dept", "dept"]) in got
+    assert ("column", "salary", "emp", ["salary"]) in read("SELECT -salary AS salary FROM emp ORDER BY salary")
+    # GROUP BY reads the column first
+    got = read("SELECT lower(city) AS city, count(*) FROM shops GROUP BY city")
+    assert ("column", "city", "shops", ["city", "city"]) in got
+
+
+def test_a_column_with_no_stated_table_is_followed_out_of_a_cte():
+    sql = ("WITH j AS (SELECT name, total FROM emp e JOIN orders o ON o.emp_id = e.id) "
+           "SELECT name, SUM(total) FROM j GROUP BY name")
+    got = read(sql)
+    assert ("column", "name", None, ["name", "name", "name"]) in got
+    assert ("column", "total", None, ["total", "total"]) in got
+
+
+def test_recursive_cte_follows_its_own_column():
+    sql = ("WITH RECURSIVE t AS (SELECT id, parent_id FROM nodes WHERE id = 1 UNION ALL "
+           "SELECT n.id, n.parent_id FROM nodes n JOIN t ON n.parent_id = t.id) SELECT id FROM t")
+    assert sorted(read(sql)) == sorted([
+        ("column", "id", "nodes", ["id"] * 5), ("column", "parent_id", "nodes", ["parent_id"] * 3),
+        ("table", "nodes", None, ["nodes", "nodes"]),
+    ])

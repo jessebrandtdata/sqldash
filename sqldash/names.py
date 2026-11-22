@@ -68,8 +68,8 @@ def _names_in(sql, trees, exp, Scope, traverse_scope):
         done = set()  # id(Column node) for every column already settled
         by_query = {id(sc.expression): sc for sc in scopes}  # id(query node) -> its scope
         settled = {}  # id(Column node) -> (table, name) of the real column it turned out to be
-        passed = {}  # id(scope) -> {output name: (table, name)} for columns it selects unrenamed
-        starred = set()  # id(scope) for every query that selects a bare *
+        passed = {}  # id(query node) -> {output name: (table, name)} for columns it selects unrenamed
+        starred = set()  # id(query node) for every query that selects a bare *
 
         def through(scope, name, star=True):
             # The real (table, name) behind an output column of a subquery or CTE, or None.
@@ -78,10 +78,15 @@ def _names_in(sql, trees, exp, Scope, traverse_scope):
                 # a UNION gives out its left branch's names
                 left = by_query.get(id(query.left.unnest()))
                 return through(left, name, star) if left is not None else None
-            hit = passed.get(id(scope), {}).get(name)
-            picked = [src for _, src in scope.selected_sources.values()]
-            if hit is not None or not star or id(scope) not in starred or len(picked) != 1:
+            hit = passed.get(id(query), {}).get(name)
+            if hit is not None:
                 return hit
+            if name in getattr(query, "named_selects", []):
+                # the query gives this name out itself, as an alias or an expression: not a table's column
+                return None
+            picked = [src for _, src in scope.selected_sources.values()]
+            if not star or id(query) not in starred or len(picked) != 1:
+                return None
             src = picked[0]
             if id(src) in table_name:
                 # SELECT * FROM one table: every other name it gives out is that table's column
@@ -114,12 +119,13 @@ def _names_in(sql, trees, exp, Scope, traverse_scope):
                 return set(named) | {key}
             return None
 
-        def claim(col, sources, aliases=frozenset(), plain=frozenset(), owner=None):
+        def claim(col, sources, aliases=frozenset(), plain=frozenset(), owner=None, ordering=False):
             # Settle one column against the sources of one part of the query, if they resolve it.
             if id(col) in done or not isinstance(col.this, exp.Identifier):
                 return
-            if not col.table and col.name in aliases and col.name not in plain:
-                # a select alias used in GROUP BY, ORDER BY or HAVING
+            if not col.table and col.name in aliases and (ordering or col.name not in plain):
+                # a select alias: ORDER BY and DISTINCT ON read the alias first; GROUP BY and HAVING
+                # read it only when no column of that name is selected
                 done.add(id(col))
                 return
             real = [s for s in sources.values() if id(s) in table_name]
@@ -161,18 +167,20 @@ def _names_in(sql, trees, exp, Scope, traverse_scope):
             if len(real) == 1:
                 keep(col, table_name[id(real[0])])
             elif real:
-                add("column", None, _span(col.this))
+                keep(col, None)
 
-        def late(col, root):
-            # True when the column sits in GROUP BY, HAVING, QUALIFY or the query's own ORDER BY.
+        def clause(col, root):
+            # "order" in the query's own ORDER BY or DISTINCT ON, "group" in GROUP BY, HAVING or QUALIFY, else None.
             node = col.parent
             while node is not None and node is not root:
                 if isinstance(node, (exp.Group, exp.Having, exp.Qualify)):
-                    return True
+                    return "group"
+                if isinstance(node, exp.Distinct):
+                    return "order"
                 if isinstance(node, exp.Order) and not isinstance(node.parent, exp.Window):
-                    return True
+                    return "order"
                 node = node.parent
-            return False
+            return None
 
         # traverse_scope yields inner queries first, so a column settles in its innermost query
         for scope in scopes:
@@ -180,7 +188,8 @@ def _names_in(sql, trees, exp, Scope, traverse_scope):
             own = list(scope.find_all(exp.Column))
             selects = getattr(scope.expression, "selects", [])
             aliases = frozenset(e.alias for e in selects if isinstance(e, exp.Alias))
-            plain = frozenset(c.name for c in own if not c.table and not late(c, scope.expression))
+            where = {id(c): clause(c, scope.expression) for c in own}
+            plain = frozenset(c.name for c in own if not c.table and where[id(c)] is None)
             if isinstance(scope.expression, exp.SetOperation):
                 # ORDER BY after a UNION names the union's outputs
                 for col in own:
@@ -192,11 +201,13 @@ def _names_in(sql, trees, exp, Scope, traverse_scope):
             # only what this query's FROM and JOINs name; scope.sources also lists every visible CTE
             sources = {name: src for name, (_, src) in scope.selected_sources.items()}
             for col in own + list(scope.columns):
-                claim(col, sources, aliases, plain)
+                claim(col, sources, aliases, plain, ordering=where.get(id(col)) == "order")
             # what this query gives out under a real column's own name, for the queries that read it
-            passed[id(scope)] = {e.name: settled[id(e)] for e in selects if isinstance(e, exp.Column) and id(e) in settled}
+            passed[id(scope.expression)] = {
+                e.name: settled[id(e)] for e in selects if isinstance(e, exp.Column) and id(e) in settled
+            }
             if any(isinstance(e, exp.Star) for e in selects):
-                starred.add(id(scope))
+                starred.add(id(scope.expression))
 
         # UPDATE, DELETE, INSERT and MERGE have no scope of their own
         for stmt in tree.find_all(exp.Update, exp.Delete, exp.Insert, exp.Merge):

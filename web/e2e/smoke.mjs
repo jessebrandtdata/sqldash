@@ -349,6 +349,11 @@ async function aiPass(browser, matches, base) {
   assert(b17.join() === "table:employees,column:name,column:salary", `name boxes are ${b17}`);
   ok(17, "Write SQL confirms first, then shows three lines, the label, OK syntax and the names");
 
+  // 17b: a name box has a line height of its own; with the browser default an underscore is clipped at 1x
+  const boxLine = await page.$eval(".name-box", (e) => getComputedStyle(e).lineHeight);
+  assert(boxLine !== "normal" && parseFloat(boxLine) >= 20, `name box line height is ${boxLine}`);
+  ok("17b", "name boxes set a line height that leaves room for an underscore");
+
   // 18: a name edit changes every occurrence and re-checks
   const k0 = { check: counts.check, sql: counts.sql, summary: counts.summary, judge: counts.judge };
   await nameBox("salary").fill("pay");
