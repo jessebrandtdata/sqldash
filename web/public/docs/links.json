@@ -60,7 +60,7 @@
    "CEIL": "https://dev.mysql.com/doc/refman/8.4/en/mathematical-functions.html",
    "SUBQUERY": "https://dev.mysql.com/doc/refman/8.4/en/subqueries.html"
   },
-  "search": "https://dev.mysql.com/search/?q={q}&d=doc"
+  "search": "https://dev.mysql.com/doc/search/?q={q}"
  },
  "redshift": {
   "pages": {},

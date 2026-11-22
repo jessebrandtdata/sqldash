@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Host-only link check: every URL in links.json and every distinct page in pg17.json must answer 200."""
 import json
+import os
+import shutil
+import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 DOCS = Path(__file__).resolve().parent.parent / "web" / "public" / "docs"
-CLIENT_NAME = "sqldash-link-check"
-PAUSE_SECONDS = 0.5
+PAUSE_SECONDS = 1.0
 
 
 def collect():
@@ -26,25 +26,24 @@ def collect():
 
 
 def status(url):
-    req = urllib.request.Request(url, headers={"User-Agent": CLIENT_NAME})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.status
-    except urllib.error.HTTPError as err:
-        return err.code
-    except urllib.error.URLError as err:
-        return str(err.reason)
+    # plain curl with no custom headers; the status code comes back on stdout
+    run = subprocess.run(["curl", "-s", "-o", os.devnull, "-m", "20", "-w", "%{http_code}", url],
+                         capture_output=True, text=True)
+    return run.stdout.strip() or f"curl exit {run.returncode}"
 
 
 def main():
+    if shutil.which("curl") is None:
+        print("curl is not on PATH")
+        return 2
     urls = collect()
     bad = []
     for url in urls:
         code = status(url)
-        if code != 200:
+        if code != "200":
             bad.append((code, url))
-            print(f"{code} {url}")
-        time.sleep(PAUSE_SECONDS)  # short pause between requests
+            print(f"{code} {url}", flush=True)
+        time.sleep(PAUSE_SECONDS)  # pause between requests, which all go to a few hosts in turn
     print(f"checked {len(urls)} urls, {len(bad)} not 200")
     return 1 if bad else 0
 

@@ -55,10 +55,11 @@ PHRASES = {
     "OUTER JOIN": ("queries.sgml", "Qualified joins", 0),
 }
 
-# blocks removed before looking for paragraphs
-SKIP_BLOCKS = ["table", "informaltable", "note", "tip", "warning", "caution", "programlisting",
-               "screen", "itemizedlist", "orderedlist", "variablelist", "example", "figure",
-               "synopsis", "indexterm", "simplelist", "procedure", "footnote"]
+# blocks cut out of a section body before its paragraphs are read (code and lists inside a paragraph stay)
+DROP_BLOCKS = ["table", "informaltable", "note", "tip", "warning", "caution", "example", "figure",
+               "variablelist", "simplelist", "procedure", "indexterm", "footnote"]
+CODE_RE = re.compile(r"<(synopsis|programlisting|screen)\b[^>]*>.*?</\1>", re.S)
+PARA_TAG = re.compile(r"<(/?)(para|itemizedlist|orderedlist|synopsis|programlisting|screen)\b[^>]*>")
 
 
 # ---------------------------------------------------------------- text
@@ -122,20 +123,51 @@ def strip_blocks(s, names):
     return "".join(out)
 
 
+def prose_text(s):
+    """A paragraph's text: prose collapsed to single spaces; code blocks and list items on their own lines."""
+    out, pos = [], 0
+
+    def prose(part):
+        part = re.sub(r"</?listitem\b[^>]*>", "\x01", part)
+        return re.sub(r" *\x01 *", "\n", sgml_text(part))
+
+    for m in CODE_RE.finditer(s):
+        out.append(prose(s[pos:m.start()]))
+        out.append(sgml_text(m.group(0), keep_lines=True))
+        pos = m.end()
+    out.append(prose(s[pos:]))
+    return re.sub(r"\n{2,}", "\n", "\n".join(p for p in out if p)).strip()
+
+
+def top_paragraphs(body):
+    """Bodies of the paragraphs that are not inside a list or listing."""
+    paras, stack, start = [], [], 0
+    for m in PARA_TAG.finditer(body):
+        tag = m.group(2)
+        if m.group(1):
+            if stack and stack[-1] == tag:
+                stack.pop()
+                if tag == "para" and not stack:
+                    paras.append(body[start:m.start()])
+        else:
+            if tag == "para" and not stack:
+                start = m.end()
+            stack.append(tag)
+    return paras
+
+
 def leading_text(body, max_paras=None, skip_paras=0):
     """Whole paragraphs from the start of a section body, under the budget, at least one."""
     body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
-    # lists, listings and notes are cut out of the body, so only a paragraph's own prose remains
-    flat = strip_blocks(body, SKIP_BLOCKS)
-    paras = re.findall(r"<para\b[^>]*>(.*?)</para>", flat, flags=re.S)
-    texts = [t for t in (sgml_text(p) for p in paras) if t][skip_paras:]
+    flat = strip_blocks(body, DROP_BLOCKS)
+    texts = [t for t in (prose_text(p) for p in top_paragraphs(flat)) if t][skip_paras:]
     if not texts:
         return ""
     out = texts[0]
     for t in texts[1:max_paras]:
         if len(out) + 1 + len(t) >= TEXT_BUDGET:
             break
-        out += " " + t
+        out += ("\n" if "\n" in out or "\n" in t else " ") + t
     return out
 
 
@@ -233,7 +265,7 @@ def parse_ref_page(sgml):
         key = m.group(1).upper()
         body_text = leading_text(sec["body"])
         if KEY_RE.match(key) and body_text:
-            rows.append(make_entry("clause", key, label, body_text, page + "#" + sec["id"]))
+            rows.append(make_entry("clause", key, label, body_text, page + "#" + sec["id"].upper()))
     return rows
 
 
@@ -283,43 +315,33 @@ def parse_literal_sections(sgml, kind):
             continue
         url = DOCS_BASE + page.lower() + ".html"
         if kind == "topic" and sec["id"] != page:
-            url += "#" + sec["id"]
+            url += "#" + sec["id"].upper()
         for key in keys:
             rows.append(make_entry(kind, key, sec["title"], text, url, first_synopsis(sec["body"])))
     return rows
 
 
 def parse_type_rows(sgml):
-    """Entries for the rows of the data type tables (Name ... Description)."""
-    sections = find_sections(sgml)
-    sect1s = [s for s in sections if s["tag"] == "sect1"]
+    """Entries for the rows of the main data type table (Name, Aliases, Description)."""
+    tm = re.search(r"""<table\b[^>]*\bid=["']datatype-table["'][^>]*>.*?</table>""", sgml, flags=re.S)
+    cm = re.search(r"""<chapter\b[^>]*\bid=["']([^"']+)["']""", sgml)
+    if not tm or not cm:
+        return []
+    url = DOCS_BASE + cm.group(1).lower() + ".html"
     rows = []
-    for tm in re.finditer(r"<table\b.*?</table>", sgml, flags=re.S):
-        table = tm.group(0)
-        head = re.search(r"<thead>(.*?)</thead>", table, flags=re.S)
-        if not head:
+    for rm in re.finditer(r"<row>(.*?)</row>", tm.group(0).split("</thead>", 1)[-1], flags=re.S):
+        cells = re.findall(r"<entry\b[^>]*>(.*?)</entry>", rm.group(1), flags=re.S)
+        if len(cells) < 3:
             continue
-        cols = [sgml_text(c) for c in re.findall(r"<entry\b[^>]*>(.*?)</entry>", head.group(1), flags=re.S)]
-        if not cols or cols[0] != "Name" or "Description" not in cols:
-            continue
-        di = cols.index("Description")
-        enclosing = [s for s in sect1s if s["open_start"] < tm.start() < s["end"]]
-        if not enclosing or not enclosing[-1]["id"]:
-            continue
-        url = DOCS_BASE + enclosing[-1]["id"].lower() + ".html"
-        body = table[head.end():]
-        for rm in re.finditer(r"<row>(.*?)</row>", body, flags=re.S):
-            cells = re.findall(r"<entry\b[^>]*>(.*?)</entry>", rm.group(1), flags=re.S)
-            if len(cells) <= di:
-                continue
-            desc = sgml_text(cells[di])
-            if not desc:
-                continue
-            # a cell may list several names, e.g. "character varying(n), varchar(n)"
-            for name in sgml_text(cells[0]).split(","):
-                word = re.match(r"""[\s"]*([A-Za-z_][A-Za-z0-9_]*)""", name)
-                if word and KEY_RE.match(word.group(1).upper()):
-                    rows.append(make_entry("type", word.group(1).upper(), name.strip(), desc, url))
+        name, aliases, desc = (sgml_text(c) for c in cells[:3])
+        keys = []
+        for label in [name] + aliases.split(","):
+            word = re.match(r"""[\s"]*([A-Za-z_][A-Za-z0-9_]*)""", label)
+            key = word.group(1).upper() if word else ""
+            if KEY_RE.match(key) and key not in keys:
+                keys.append(key)
+        if desc:
+            rows += [make_entry("type", key, name, desc, url) for key in keys]
     return rows
 
 
@@ -387,7 +409,7 @@ def phrase_entries(files):
         url = DOCS_BASE + page.lower() + ".html"
         inner = ids[-1]["id"]
         if inner != page:
-            url += "#" + inner
+            url += "#" + inner.upper()
         rows.append(make_entry("clause", phrase, phrase, text, url))
     return rows
 

@@ -127,7 +127,7 @@ def test_parse_ref_page_command_and_clause():
     assert "Second paragraph" not in cmd["text"]
     clause = [r for r in rows if r["kind"] == "clause"][0]
     assert clause["key"] == "WORK"
-    assert clause["url"] == BASE + "sql-abort.html#sql-abort-clause"
+    assert clause["url"] == BASE + "sql-abort.html#SQL-ABORT-CLAUSE"
     assert clause["text"] == "One short paragraph."
 
 
@@ -150,6 +150,54 @@ def test_parse_literal_sections():
     assert row["text"] == (
         "The COALESCE function returns the first non-null argument. Second paragraph."
     )
+
+
+CODE_IN_PARA = """
+<sect1 id="queries-x"><sect2 id="queries-group">
+ <title><literal>GROUP BY</literal> Clause</title>
+ <para>
+  The clause has the general form
+<synopsis>
+GROUP BY a,
+         b &lt; c
+</synopsis>
+  and then <literal>GROUP BY</literal> condenses rows. One of
+  <itemizedlist>
+   <listitem><para>first</para></listitem>
+   <listitem><para>second   item</para></listitem>
+  </itemizedlist>
+  applies.
+ </para>
+</sect2></sect1>
+"""
+
+TYPE_TABLE = """
+<chapter id="datatype"><table id="datatype-table">
+ <thead><row><entry>Name</entry><entry>Aliases</entry><entry>Description</entry></row></thead>
+ <tbody>
+  <row><entry><type>integer</type></entry><entry><type>int</type>, <type>int4</type></entry>
+   <entry>signed four-byte integer</entry></row>
+  <row><entry><type>box</type></entry><entry></entry><entry>rectangular box</entry></row>
+ </tbody>
+</table></chapter>
+"""
+
+
+def test_code_blocks_and_list_items_keep_their_lines():
+    row = load_script().parse_literal_sections(CODE_IN_PARA, "topic")[0]
+    assert row["text"] == (
+        "The clause has the general form\nGROUP BY a,\n         b < c\n"
+        "and then GROUP BY condenses rows. One of\nfirst\nsecond item\napplies."
+    )
+    assert row["url"].endswith("queries-x.html#QUERIES-GROUP")
+
+
+def test_parse_type_rows_keys_name_and_aliases():
+    rows = load_script().parse_type_rows(TYPE_TABLE)
+    assert [(r["key"], r["title"]) for r in rows] == [
+        ("INTEGER", "integer"), ("INT", "integer"), ("INT4", "integer"), ("BOX", "box")]
+    assert rows[0]["text"] == "signed four-byte integer"
+    assert rows[0]["url"] == BASE + "datatype.html"
 
 
 def test_section_text_stops_before_1500_characters_at_a_paragraph():
@@ -195,6 +243,17 @@ def test_every_entry_is_complete():
             assert e["title"] and e["text"].strip()
             assert not re.search(r"</?[a-z]+[ >/]|&[a-z]+;", e["text"])   # no leftover tags or entities
             assert e["url"].startswith("https://www.postgresql.org/docs/17/")
+
+
+def test_fragments_are_upper_case():
+    for entries in INDEX["entries"].values():
+        for e in entries:
+            frag = e["url"].partition("#")[2]
+            assert frag == frag.upper()
+
+
+def test_integer_comes_from_the_main_type_table():
+    assert "four-byte" in INDEX["entries"]["INTEGER"][0]["text"]
 
 
 def test_reserved_words():
