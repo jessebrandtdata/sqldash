@@ -1,4 +1,5 @@
 """A stdlib HTTP server: a small JSON API plus the built page in dist/."""
+import ipaddress
 import json
 import os
 import sys
@@ -14,6 +15,8 @@ from . import caps, checker, envfile, errors, judge, summary, theme
 MAX_BODY = 1_048_576
 DRAIN_LIMIT = 8 * 1024 * 1024
 CHUNK = 65536
+LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost"})
+WILDCARD = frozenset({"0.0.0.0", "::"})
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -59,8 +62,12 @@ class Services:
 class _Handler(BaseHTTPRequestHandler):
     dist: Path
     services: Services
+    bound_host: str = "127.0.0.1"
+    allowed_hosts: frozenset = frozenset()
     protocol_version = "HTTP/1.1"
     server_version = "sqldash"
+    # a stalled client is dropped after this many seconds
+    timeout = 30
 
     # ---- output helpers ----
     def _send(self, status, body: bytes, ctype, extra=None, close=False):
@@ -105,7 +112,63 @@ class _Handler(BaseHTTPRequestHandler):
     def _path(self):
         return unquote(urlsplit(self.path).path)
 
+    # ---- request checks ----
+    @staticmethod
+    def _hostname(value):
+        # The host part of a Host header value: port dropped, IPv6 brackets stripped, lower case.
+        value = value.strip().lower()
+        if value.startswith("["):
+            end = value.find("]")
+            return value[1:end] if end > 0 else ""
+        return value.partition(":")[0]
+
+    def _host_allowed(self, name):
+        if name in self.allowed_hosts:
+            return True
+        bound = self.bound_host.strip("[]").lower()
+        if bound in LOOPBACK:
+            return name in LOOPBACK
+        if bound in WILDCARD:
+            if name == "localhost":
+                return True
+            try:
+                ipaddress.ip_address(name)
+            except ValueError:
+                return False
+            return True
+        return name == bound
+
+    def _forbidden(self):
+        # The Host or Origin header is not one this server answers to.
+        host = self.headers.get("Host")
+        if host is None or not self._host_allowed(self._hostname(host)):
+            return True
+        origin = self.headers.get("Origin")
+        return origin is not None and urlsplit(origin).netloc.lower() != host.strip().lower()
+
+    def _drain_body(self):
+        # Read and discard a declared body so the client can finish sending before the answer.
+        raw = self.headers.get("Content-Length", "")
+        if raw.strip().isdigit() and int(raw) <= DRAIN_LIMIT:
+            left = int(raw)
+            while left > 0:
+                chunk = self.rfile.read(min(CHUNK, left))
+                if not chunk:
+                    break
+                left -= len(chunk)
+
+    def _refuse(self, kind):
+        # Answer a failed request check after draining the body, then close.
+        try:
+            self._drain_body()
+        except OSError:
+            pass
+        self._fail(kind, close=True)
+
     def do_GET(self):
+        if self._forbidden():
+            self._refuse("forbidden")
+            return
         path = self._path()
         name = ROUTES.get(("GET", path))
         if name:
@@ -115,24 +178,36 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._file(path)
 
+    do_HEAD = do_GET
+
     def do_POST(self):
+        if self._forbidden():
+            self._refuse("forbidden")
+            return
         name = ROUTES.get(("POST", self._path()))
         if not name:
             # the body is left unread, so the connection cannot be reused
             self._fail("not_found", close=True)
+            return
+        media = self.headers.get("Content-Type", "").partition(";")[0].strip().lower()
+        if media != "application/json":
+            self._refuse("bad_request")
             return
         self._guarded(getattr(self, name))
 
     def _other(self):
         self._fail("not_found", close=True)
 
-    do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _other
+    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _other
 
     def _guarded(self, fn):
         try:
             fn()
         except errors.ServiceError as e:
             self._fail(e.kind, e.detail)
+        except TimeoutError:
+            # a stalled client: drop the connection without an answer
+            self.close_connection = True
         except ValueError:
             self._fail("bad_request")
         except Exception as e:
@@ -217,9 +292,20 @@ class _TooBig(errors.ServiceError):
         super().__init__("too_big")
 
 
-def make_server(host: str, port: int, dist: Path, services: Services) -> ThreadingHTTPServer:
-    """Build a server whose handler is bound to this dist and these services."""
-    handler = type("Handler", (_Handler,), {"dist": Path(dist), "services": services})
+def make_server(
+    host: str, port: int, dist: Path, services: Services, *, allowed_hosts: frozenset[str] = frozenset()
+) -> ThreadingHTTPServer:
+    """Build a server whose handler is bound to this dist, these services and these Host names."""
+    handler = type(
+        "Handler",
+        (_Handler,),
+        {
+            "dist": Path(dist),
+            "services": services,
+            "bound_host": host,
+            "allowed_hosts": frozenset(n.lower() for n in allowed_hosts),
+        },
+    )
     srv = ThreadingHTTPServer((host, port), handler)
     srv.daemon_threads = True
     return srv
@@ -230,7 +316,9 @@ def main(argv):
     port = int(argv[1]) if len(argv) > 1 else 8096
     envfile.load_env_file(envfile.default_path(os.environ), os.environ)
     dist = Path(__file__).resolve().parent.parent / "dist"
-    srv = make_server(host, port, dist, Services())
+    names = os.environ.get("SQLDASH_ALLOWED_HOSTS", "")
+    allowed = frozenset(n.strip().lower() for n in names.split(",") if n.strip())
+    srv = make_server(host, port, dist, Services(), allowed_hosts=allowed)
     print(f"sqldash on http://{host}:{srv.server_address[1]}", flush=True)
     try:
         srv.serve_forever()

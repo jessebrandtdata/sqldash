@@ -5,7 +5,7 @@ Spec: `specs:sqldash/specs/2026-11-21-sqldash-design.md`. Plan: `specs:sqldash/p
 ## Layout
 
 - `serve [host] [port]` runs `python3 -m sqldash.server` (default 127.0.0.1:8096).
-- `sqldash/` is the stdlib server: `server.py` (routes, static `dist/`, `main`), `checker.py` (pglast syntax check), `summary.py` (Claude), `judge.py` (Jev), `caps.py`, `dialects.py`, `errors.py`, `envfile.py` (key file loader), `theme.py`, `words.py`.
+- `sqldash/` is the stdlib server: `server.py` (routes, static `dist/`, `main`), `checker.py` (syntax check: pglast for `postgres`, sqlglot for `mysql`, `redshift`, `athena`), `summary.py` (Claude), `judge.py` (Jev), `caps.py`, `dialects.py`, `errors.py`, `envfile.py` (key file loader), `theme.py`, `words.py`.
 - `web/` is the Svelte source (`src/`, `tests/*.test.js`, `scripts/source-hash.js`, `public/docs/`); `dist/` is its build, committed.
 - `web/e2e/smoke.mjs` is a headless-browser smoke test; `web/e2e/fake_server.py` is its stand-in for the two paid services.
 - `scripts/build_pgdocs.py` builds `pg17.json`; `scripts/check_links.py` checks doc links with plain `curl`.
@@ -18,6 +18,7 @@ Spec: `specs:sqldash/specs/2026-11-21-sqldash-design.md`. Plan: `specs:sqldash/p
 - Smoke (host only, not in `check`; never downloads a browser): `cd web && LD_LIBRARY_PATH=$HOME/dev/bullets/web/tests/.libs/usr/lib/x86_64-linux-gnu node e2e/smoke.mjs`. It uses the browser cached on the box.
 - Link check (host only, not in `check`): `python3 scripts/check_links.py`.
 - Keys load from `~/.config/sqldash/env` or `SQLDASH_ENV`: `ANTHROPIC_API_KEY`, `TYPESAFE_API_KEY`; `SQLDASH_SUMMARY_MODEL` overrides the summary model.
+- Every request needs a `Host` the server answers to: loopback names for a loopback bind, any IP literal and `localhost` for `0.0.0.0` or `::`, else exactly the bound host. `SQLDASH_ALLOWED_HOSTS` (comma-separated names, read in `main`) adds more. POSTs must be `application/json`, and an `Origin` header must equal `Host`; otherwise 403 `forbidden` or 400 `bad_request`, before any service runs.
 
 ## Rules
 
@@ -37,8 +38,8 @@ Spec: `specs:sqldash/specs/2026-11-21-sqldash-design.md`. Plan: `specs:sqldash/p
 
 Runtime (a new one is the maintainer's decision):
 
-- `pglast>=7,<8`: PostgreSQL 17 syntax check (pglast 8 is PostgreSQL 18).
-- `sqlglot>=30.33,<31`: dialect parsing for `postgres`, `mysql`, `redshift`, `athena`.
+- `pglast>=7,<8`: the exact `postgres` syntax check, PostgreSQL 17 grammar (pglast 8 is PostgreSQL 18).
+- `sqlglot>=30.33,<31`: approximate syntax check for `mysql`, `redshift`, `athena`; it is not used for `postgres`.
 - `anthropic>=1,<2`: the plain-English summary call.
 - `typesafe-sdk>=0.7.5,<0.8`: the Jev agreement check.
 
