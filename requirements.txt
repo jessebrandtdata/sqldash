@@ -1,0 +1,4 @@
+pglast>=7,<8
+sqlglot>=30.33,<31
+anthropic>=1,<2
+typesafe-sdk>=0.7.5,<0.8
