@@ -3,6 +3,7 @@ from .dialects import DIALECTS
 
 MAX_SQL_CHARS = 50_000
 DEFAULT_SUMMARY_MODEL = "claude-haiku-5-5"
+DEFAULT_SQL_MODEL = "claude-sonnet-5-5"
 
 
 def capabilities(environ) -> dict:
@@ -15,6 +16,11 @@ def capabilities(environ) -> dict:
             "available": has_summary,
             "missing": None if has_summary else "ANTHROPIC_API_KEY",
             "model": environ.get("SQLDASH_SUMMARY_MODEL") or DEFAULT_SUMMARY_MODEL,
+        },
+        "sql": {
+            "available": has_summary,
+            "missing": None if has_summary else "ANTHROPIC_API_KEY",
+            "model": environ.get("SQLDASH_SQL_MODEL") or DEFAULT_SQL_MODEL,
         },
         "judge": {
             "available": has_judge,

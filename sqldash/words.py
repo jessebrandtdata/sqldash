@@ -19,6 +19,21 @@ def summary_user(dialect_label: str, sql: str) -> str:
     return f"Dialect: {dialect_label}\n\n{sql}"
 
 
+SQL_SYSTEM = (
+    "You write {dialect} SQL for a person who will read and check it themself. Write one "
+    "query that does what the description says. Use the table and column names the "
+    "description gives. Where it gives none, invent short plain ones: the person will "
+    "rename them. Write one clause per line with upper-case keywords and no comments. Add "
+    "nothing the description does not ask for: no extra filter, ordering or limit. Put the "
+    "query in sql. Leave note empty unless the description is too vague to write a query; "
+    "then leave sql empty and say in note, in one sentence, what is missing."
+)
+
+
+def sql_user(dialect_label: str, english: str) -> str:
+    return f"Dialect: {dialect_label}\n\n{english}"
+
+
 JUDGE_QUESTION = "agreement"
 
 JUDGE_INSTRUCTIONS = "Does the English description say what the SQL query does?"
