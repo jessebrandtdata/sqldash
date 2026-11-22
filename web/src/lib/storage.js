@@ -12,11 +12,11 @@ export function load(store) {
   }
 }
 
-// Writes the four saved fields and ignores every failure.
+// Writes the nine saved fields and ignores every failure.
 export function save(store, state) {
   try {
-    const { sql, english, dialect, origin } = state;
-    store.setItem(KEY, JSON.stringify({ sql, english, dialect, origin }));
+    const { sql, english, dialect, origin, direction, sqlOrigin, base, edits, note } = state;
+    store.setItem(KEY, JSON.stringify({ sql, english, dialect, origin, direction, sqlOrigin, base, edits, note }));
   } catch {
     // A blocked or full store only means nothing is remembered.
   }
