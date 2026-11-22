@@ -219,6 +219,7 @@
         {#if summaryErr}<p class="line err summary-err">{summaryErr}</p>{/if}
         {#if judgeErr}<p class="line err judge-err">{judgeErr}</p>{/if}
 
+        {#if s.english !== ""}
         <p class="line origin {s.summaryMeta && s.summaryMeta.stale ? 'stale' : ''}">
           {#if s.origin === "yours"}
             yours
@@ -228,6 +229,7 @@
             <b>AI summary</b>
           {/if}
         </p>
+        {/if}
         {#if s.verdict}
           <p class="line verdict"><b>Jev</b>: {choiceText[s.verdict.choice] || s.verdict.choice} · {Math.round(s.verdict.confidence * 100)}%</p>
         {/if}

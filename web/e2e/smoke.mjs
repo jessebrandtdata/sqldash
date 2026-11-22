@@ -84,12 +84,12 @@ async function buildMatcher() {
   return (url) => rules.some((re) => re.test(url));
 }
 
-// Starts ./serve on a free port and resolves with the child and its base URL.
-async function startServer() {
+// Starts a server command on a free port and resolves with the child and its base URL.
+async function startServer(cmd = join(root, "serve"), extra = []) {
   const port = await freePort();
   const env = { ...process.env, SQLDASH_ENV: "/dev/null" };
   for (const k of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "TYPESAFE_API_KEY"]) delete env[k];
-  const child = spawn(join(root, "serve"), ["127.0.0.1", String(port)], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(cmd, [...extra, ...(extra.length ? [String(port)] : ["127.0.0.1", String(port)])], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
   let log = "";
   child.stderr.on("data", (d) => { log += d; });
   const base = await new Promise((resolve, reject) => {
@@ -113,10 +113,146 @@ function assert(cond, message) {
   if (!cond) throw new Error(message);
 }
 
+const norm = (t) => t.replace(/\s+/g, " ").trim();
+
+// Assertions 8 to 15: the AI buttons against the fake services, light scheme.
+async function aiPass(browser, matches, base) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: "light" });
+  const page = await context.newPage();
+  await page.route("**/*", (route) => (matches(route.request().url()) ? route.abort() : route.continue()));
+  // An empty theme.css leaves the page on its literal light fallback colours.
+  await page.route("**/theme.css", (route) => route.fulfill({ status: 200, contentType: "text/css", body: "" }));
+  let summaryCount = 0;
+  page.on("request", (req) => { if (/api\/summary/.test(req.url())) summaryCount++; });
+  const dialogs = [];
+  let dialogAction = "accept";
+  page.on("dialog", (d) => {
+    dialogs.push(d.message());
+    return dialogAction === "accept" ? d.accept() : d.dismiss();
+  });
+  const editor = page.locator(".cm-content");
+  const english = page.locator(".english");
+  const label = page.locator(".origin");
+  const summaryBtn = page.locator(".summary-btn");
+  const verdict = page.locator(".verdict");
+  const labelText = async () => (await label.count() ? norm(await label.textContent()) : "");
+  const waitLabel = (part) => page.waitForFunction(
+    (t) => (document.querySelector(".origin")?.textContent || "").replace(/\s+/g, " ").includes(t),
+    part,
+    { timeout: 10000 },
+  ).catch(async () => { throw new Error(`label never showed "${part}"; it shows "${await labelText()}"`); });
+  const waitEnabled = () => page.waitForFunction(
+    () => { const b = document.querySelector(".summary-btn"); return b && !b.disabled; },
+    null,
+    { timeout: 10000 },
+  );
+  const replaceSql = async (text) => {
+    await editor.click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.type(text);
+  };
+  const appendSql = async (text) => {
+    await editor.click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type(text);
+  };
+
+  await page.goto(base);
+  await editor.waitFor();
+
+  // 8: summary fills the English box and the label, with no confirm for an empty box
+  await replaceSql("select a from t");
+  await summaryBtn.click();
+  await page.waitForFunction(() => document.querySelector(".english").value === "It reads t.", null, { timeout: 10000 })
+    .catch(async () => { throw new Error(`English box holds "${await english.inputValue()}"`); });
+  await waitLabel("AI summary · fake-model · 11 in / 7 out tokens");
+  assert(dialogs.length === 0, `a confirm appeared for an empty box: ${dialogs}`);
+  ok(8, "AI summary fills the English box and the label; no confirm for an empty box");
+
+  // 9: Jev verdict shows choice, percent and name
+  await page.locator(".judge-btn").click();
+  await verdict.waitFor({ timeout: 10000 });
+  const v = norm(await verdict.textContent());
+  assert(v.includes("Jev") && v.includes("differs") && v.includes("87%"), `verdict shows "${v}"`);
+  ok(9, `Jev verdict shows "${v}"`);
+  const shots = process.env.SQLDASH_SMOKE_SHOTS;
+  if (shots) {
+    mkdirSync(shots, { recursive: true });
+    await page.screenshot({ path: join(shots, "page-ai.png") });
+  }
+
+  // 10: editing the SQL clears the verdict and marks the label
+  await appendSql(" where a = 1");
+  await page.waitForFunction(() => !document.querySelector(".verdict"), null, { timeout: 5000 });
+  await waitLabel("· the SQL has changed since");
+  ok(10, "editing the SQL removes the verdict and marks the label");
+
+  // 11: typing English makes the label `yours`; the confirm guards the replacement
+  await english.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("!");
+  await page.waitForFunction(() => (document.querySelector(".origin")?.textContent || "").trim() === "yours");
+  dialogAction = "dismiss";
+  const before = summaryCount;
+  await summaryBtn.click();
+  await page.waitForTimeout(600);
+  assert(dialogs.length === 1 && dialogs[0] === "Replace what you wrote with an AI summary?", `dialogs: ${JSON.stringify(dialogs)}`);
+  assert((await english.inputValue()) === "It reads t.!", "dismissing the confirm changed the English box");
+  assert(summaryCount === before, "dismissing the confirm still sent a request");
+  dialogAction = "accept";
+  await summaryBtn.click();
+  await page.waitForFunction(() => document.querySelector(".english").value === "It reads t.", null, { timeout: 10000 });
+  assert(dialogs.length === 2 && dialogs[1] === dialogs[0], "accepting did not raise the same confirm");
+  await waitEnabled();
+  ok(11, "label reads yours after typing; confirm text exact; dismiss changes and sends nothing; accept replaces");
+
+  // 12 and 14: a slow answer for changed SQL arrives marked stale; the busy button takes no second request
+  await replaceSql("select slow from t");
+  const c0 = summaryCount;
+  await summaryBtn.click();
+  const busyDisabled = await summaryBtn.isDisabled();
+  await summaryBtn.click({ force: true, timeout: 2000 }).catch(() => {});
+  await appendSql(" ");
+  await page.waitForTimeout(300);
+  await waitEnabled();
+  await waitLabel("· the SQL has changed since");
+  const sent = summaryCount - c0;
+  ok(12, "answer arriving after an SQL edit shows '· the SQL has changed since' at once");
+
+  // 13: a refusal shows its sentence, leaves the English alone, and clears on the next attempt
+  await english.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("mine");
+  await replaceSql("select refuse from t");
+  await summaryBtn.click();
+  const err = page.locator(".summary-err");
+  await err.waitFor({ timeout: 10000 });
+  assert(norm(await err.textContent()) === "The model declined to answer for this text.", `error shows "${await err.textContent()}"`);
+  assert((await english.inputValue()) === "It reads t.mine", `English changed to "${await english.inputValue()}"`);
+  await replaceSql("select a from t");
+  await summaryBtn.click();
+  await page.waitForFunction(() => !document.querySelector(".summary-err"), null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector(".english").value === "It reads t.", null, { timeout: 10000 });
+  ok(13, "refusal sentence shown, English unchanged, cleared by the next attempt");
+
+  // 14: reported after 13 so the numbers read in order
+  assert(busyDisabled, "the button was not disabled while a request was in flight");
+  assert(sent === 1, `expected 1 api/summary request during the in-flight window, saw ${sent}`);
+  ok(14, "button disabled while in flight and no second request");
+
+  // 15: only the keyboard touched the SQL box
+  await waitEnabled();
+  const finalSql = await editor.textContent();
+  assert(finalSql === "select a from t", `SQL box holds "${finalSql}"`);
+  ok(15, "SQL box holds exactly what was typed");
+  await context.close();
+}
+
 async function main() {
   const matches = await buildMatcher();
   const { child, base } = await startServer();
   let browser;
+  let second = null;
   try {
     browser = await chromium.launch({
       headless: true,
@@ -212,10 +348,17 @@ async function main() {
     // 7: no AI request was made
     assert(aiRequests.length === 0, `AI requests seen: ${aiRequests.join(", ")}`);
     ok(7, "no request to api/summary or api/judge");
+
+    // Second pass: the same page against fake services, in a light colour scheme.
+    child.kill("SIGTERM");
+    const fake = await startServer("python3", [join(root, "web", "e2e", "fake_server.py")]);
+    second = fake.child;
+    await aiPass(browser, matches, fake.base);
     console.log("smoke ok");
   } finally {
     if (browser) await browser.close().catch(() => {});
     child.kill("SIGTERM");
+    if (second) second.kill("SIGTERM");
   }
 }
 
