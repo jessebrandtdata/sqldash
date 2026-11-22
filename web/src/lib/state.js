@@ -58,3 +58,8 @@ export function setVerdict(s, r) {
 export function needsConfirm(s) {
   return s.origin === "yours" && s.english.trim() !== "";
 }
+
+// Marks the summary label stale when there is one.
+export function summaryOutdated(s) {
+  return s.summaryMeta ? { ...s, summaryMeta: staleMeta(s.summaryMeta) } : s;
+}

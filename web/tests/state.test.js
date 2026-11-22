@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   initial, editSql, editEnglish, setDialect, checkStarted, checkDone,
-  applySummary, setVerdict, needsConfirm,
+  applySummary, setVerdict, needsConfirm, summaryOutdated,
 } from "../src/lib/state.js";
 
 test("initial defaults and saved values", () => {
@@ -80,5 +80,13 @@ test("functions never mutate their input", () => {
   for (const o of outs) assert.notEqual(o, s);
   assert.equal(s.sql, "a");
   assert.equal(s.check.stale, false);
+  assert.equal(s.summaryMeta.stale, false);
+});
+
+test("summaryOutdated marks an existing summaryMeta stale", () => {
+  assert.equal(summaryOutdated(initial()).summaryMeta, null);
+  const s = applySummary(initial(), { text: "x", model: "m", input_tokens: 1, output_tokens: 2 });
+  const o = summaryOutdated(s);
+  assert.equal(o.summaryMeta.stale, true);
   assert.equal(s.summaryMeta.stale, false);
 });
