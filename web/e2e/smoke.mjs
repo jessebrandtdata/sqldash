@@ -466,6 +466,17 @@ async function aiPass(browser, matches, base) {
   assert(counts.sql === s25 + 1, `expected 1 api/sql request, saw ${counts.sql - s25}`);
   ok(25, "Write SQL and swap are disabled in flight and no second request goes out");
 
+  // 25b: a Write SQL answer that lands after the description changed is marked stale at once
+  await english.fill("slow people again");
+  await writeBtn.click();
+  await english.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" more");
+  await waitWriteEnabled();
+  await waitOrigin("· the description has changed since");
+  assert((await linesOf(right)) === FAKE_SQL, `right box holds "${await linesOf(right)}"`);
+  ok("25b", "a late Write SQL answer is marked as outdated at once and the right box holds the fake SQL");
+
   // 26: narrow layout puts the swap button between the boxes
   await page.setViewportSize({ width: 500, height: 900 });
   await page.waitForTimeout(200);
@@ -477,6 +488,25 @@ async function aiPass(browser, matches, base) {
   assert(rects.a.bottom <= rects.btn.top && rects.btn.bottom <= rects.b.top, `swap button is not between the boxes: ${JSON.stringify(rects)}`);
   if (shotDir) await page.screenshot({ path: join(shotDir, "e2s-narrow.png"), fullPage: true });
   ok(26, "at 500 px the swap button lies between the two boxes");
+
+  // 27: a names request that fails in transport shows its sentence, no boxes and no names-failed line
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await swapBtn.click();
+  await editor.waitFor({ timeout: 5000 });
+  await page.route("**/api/names", (route) => route.abort());
+  await swapBtn.click();
+  await page.locator(".names-err").waitFor({ timeout: 10000 });
+  assert(norm(await page.locator(".names-err").textContent()) === "sqldash's own server could not be reached.", `names-err reads "${await page.locator(".names-err").textContent()}"`);
+  assert((await page.locator(".name-box").count()) === 0, "name boxes appear after a failed names request");
+  assert((await page.locator(".names-failed").count()) === 0, "the names-failed line appeared for a transport failure");
+  assert((await linesOf(right)) === FAKE_SQL, `right box holds "${await linesOf(right)}"`);
+  await page.unroute("**/api/names");
+  await page.selectOption("select", "mysql");
+  await nameBox("salary").waitFor({ timeout: 10000 });
+  await page.selectOption("select", "postgres");
+  await nameBox("salary").waitFor({ timeout: 10000 });
+  assert((await page.locator(".names-err").count()) === 0, "names-err stays after a good names request");
+  ok(27, "a failed names request shows its own sentence and no boxes; changing the dialect reads the names again");
   await context.close();
 }
 

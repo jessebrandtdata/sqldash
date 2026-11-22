@@ -151,3 +151,9 @@ def test_non_sdk_exception_propagates():
     client = FakeClient(raises=RuntimeError("boom"))
     with pytest.raises(RuntimeError):
         generate.generate("x", "postgres", environ={}, client=client)
+
+
+def test_line_endings_become_newlines():
+    client = FakeClient(reply('{"sql": "SELECT a\\r\\nFROM t\\rWHERE b", "note": ""}'))
+    out = generate.generate("x", "postgres", environ={}, client=client)
+    assert out["sql"] == "SELECT a\nFROM t\nWHERE b"

@@ -38,6 +38,7 @@
   let summaryErr = $state("");
   let judgeErr = $state("");
   let sqlErr = $state("");
+  let namesErr = $state("");
 
   const check = latest();
   let timer = null;
@@ -111,10 +112,15 @@
 
   // Reads the names of the SQL as generated; the answer is dropped when the direction, text or dialect moved on.
   async function readNames() {
+    namesErr = "";
     const sent = { direction: s.direction, base: s.base, dialect: s.dialect };
     const r = await post("api/names", { sql: sent.base, dialect: sent.dialect });
     if (s.direction !== sent.direction || s.base !== sent.base || s.dialect !== sent.dialect) return;
-    s = applyNames(s, r.ok ? r.data : null);
+    if (!r.ok) {
+      namesErr = r.message;
+      return;
+    }
+    s = applyNames(s, r.data);
     persist();
     runCheck();
   }
@@ -125,6 +131,7 @@
     summaryErr = "";
     judgeErr = "";
     sqlErr = "";
+    namesErr = "";
     s = swap(s);
     persist();
     cursor = 0;
@@ -148,6 +155,7 @@
     if (needsSqlConfirm(s) && !window.confirm("Replace the SQL you wrote with AI-written SQL?")) return;
     sqlBusy = true;
     sqlErr = "";
+    namesErr = "";
     const sent = { english: s.english, dialect: s.dialect };
     const r = await post("api/sql", sent);
     if (!r.ok) {
@@ -159,6 +167,7 @@
     if (r.data.sql !== "") {
       const n = await post("api/names", { sql: r.data.sql, dialect: sent.dialect });
       names = n.ok ? n.data : null;
+      if (!n.ok) namesErr = n.message;
     }
     s = applySql(s, r.data, names);
     persist();
@@ -356,6 +365,7 @@
             </p>
           {/if}
           {#if s.note !== ""}<p class="note sql-note">{s.note}</p>{/if}
+          {#if namesErr}<p class="line err names-err">{namesErr}</p>{/if}
           <NameBoxes names={s.names} edits={s.edits} failed={s.namesFailed} onedit={onName} />
         {:else}
           <div class="actions">

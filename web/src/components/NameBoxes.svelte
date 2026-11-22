@@ -36,7 +36,7 @@
 {:else if names && names.length}
   <section class="names" aria-label="names">
     <h3>Names</h3>
-    {#each groups as g}
+    {#each groups as g (JSON.stringify([g.table]))}
       <div class="name-group">
         {#if g.table === null}
           <p class="group-head">table not stated</p>
@@ -47,7 +47,7 @@
         {/if}
         {#if g.columns.length}
           <div class="name-cols">
-            {#each g.columns as c}{@render box(c)}{/each}
+            {#each g.columns as c (nameKey(c))}{@render box(c)}{/each}
           </div>
         {/if}
       </div>

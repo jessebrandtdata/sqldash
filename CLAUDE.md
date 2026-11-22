@@ -29,7 +29,7 @@ Spec: `specs:sqldash/specs/2026-11-21-sqldash-design.md`, `specs:sqldash/specs/2
 - Only `scripts/build_pgdocs.py` produces `pg17.json`; its text is never hand-written.
 - The left box is changed only by the user's keyboard and the swap button; generated SQL appears only in the right box.
 - `checker.py`, `summary.py`, `judge.py`, `names.py` and `generate.py` import their third-party package inside the function that uses it, so `import sqldash.server` works on a box without them; test modules `pytest.importorskip` each dep.
-- AI calls refuse SQL over 50,000 characters; never truncate.
+- AI calls refuse text over 50,000 characters; never truncate.
 - No person's name in source: docs say "the user" and "the maintainer" (`tests/test_identity.py`).
 - Code comments say what the line does.
 - Work in `~/dev/sqldash`, never `~/apps/`; features land on `dev` by PR.

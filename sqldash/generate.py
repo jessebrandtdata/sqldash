@@ -68,7 +68,7 @@ def generate(english, dialect, *, environ=os.environ, client=None):
         raise ServiceError("upstream") from None
     if not isinstance(data, dict) or not isinstance(data.get("sql"), str) or not isinstance(data.get("note"), str):
         raise ServiceError("upstream")
-    sql = data["sql"].strip()
+    sql = data["sql"].strip().replace("\r\n", "\n").replace("\r", "\n")
     note = data["note"].strip()
     if sql == "" and note == "":
         raise ServiceError("upstream")
